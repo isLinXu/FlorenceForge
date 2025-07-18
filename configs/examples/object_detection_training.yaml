@@ -1,0 +1,100 @@
+# Florence-2 目标检测任务训练配置
+# 适用于: OD, OPEN_VOCABULARY_DETECTION
+
+# 基本训练参数
+num_epochs: 8
+max_steps: null
+eval_steps: 1
+save_steps: 600
+logging_steps: 50
+
+# 输出和日志
+output_dir: "./outputs/florence2_object_detection"
+logging_dir: "./outputs/florence2_object_detection/logs"
+
+# 混合精度训练
+use_fp16: false
+use_bf16: true
+
+# 梯度设置
+gradient_accumulation_steps: 2
+
+# 检查点管理
+save_total_limit: 5
+load_best_model_at_end: true
+metric_for_best_model: "eval_map"
+greater_is_better: true
+
+# 早停
+early_stopping_patience: 5
+early_stopping_threshold: 0.001
+
+# 实验跟踪
+experiment_name: "florence2_object_detection"
+run_name: "od_baseline_v1"
+tags:
+  - "florence2"
+  - "object-detection"
+  - "computer-vision"
+  - "bbox"
+
+# 模型配置
+model_config:
+  model_name: "microsoft/Florence-2-large"
+  trust_remote_code: true
+  torch_dtype: "auto"
+  device_map: "cpu"
+  attn_implementation: "flash_attention_2"
+  use_lora: true
+  
+  # LoRA配置 - 针对检测任务优化
+  lora_config:
+    r: 64
+    lora_alpha: 128
+    target_modules:
+      - "q_proj"
+      - "k_proj"
+      - "v_proj"
+      - "o_proj"
+      - "gate_proj"
+      - "up_proj"
+      - "down_proj"
+    lora_dropout: 0.1
+    bias: "none"
+    task_type: "CAUSAL_LM"
+
+# 数据配置
+data_config:
+  batch_size: 4
+  num_workers: 6
+  pin_memory: true
+  shuffle: true
+  drop_last: true
+  
+  # 数据增强 - 目标检测任务适用
+  use_augmentation: true
+  augmentation_prob: 0.5
+  
+  # 数据平衡
+  use_balanced_sampling: true
+  max_samples_per_task: 20000
+
+# 优化配置
+optimization_config:
+  learning_rate: 1.0e-05
+  weight_decay: 0.05
+  adam_beta1: 0.9
+  adam_beta2: 0.999
+  adam_epsilon: 1.0e-08
+  max_grad_norm: 1.0
+  
+  # 学习率调度
+  lr_scheduler_type: "linear"
+  warmup_ratio: 0.1
+  warmup_steps: null
+
+# 任务调度配置
+task_scheduling_config:
+  strategy: "curriculum"  # 检测任务使用课程学习
+  temperature: 1.5
+  update_frequency: 200

@@ -1,0 +1,199 @@
+# FlorenceForge 多任务训练配置示例
+# 配置版本: 1.0
+# 描述: 演示如何使用YAML配置多数据集和多任务训练
+
+config_version: "1.0"
+description: "Florence-2 多任务训练配置示例 - 图像标题生成和目标检测"
+created_at: "2024-03-20T10:00:00"
+
+# 项目配置
+project_name: "florence2_multitask_demo"
+experiment_name: "caption_detection_training"
+output_dir: "./outputs/multitask_demo"
+image_base_path: "/path/to/your/images"  # 图像文件的基础路径
+
+# 启用的任务类型
+enabled_tasks:
+  - "CAPTION"           # 图像标题生成
+  - "OD"                # 目标检测
+  - "DETAILED_CAPTION"  # 详细图像标题生成
+
+# 数据集配置
+datasets:
+  # COCO标题数据集
+  - name: "coco_captions"
+    path: "/path/to/coco/captions.jsonl"
+    task_types: ["CAPTION", "DETAILED_CAPTION"]
+    format: "coco"
+    weight: 1.0
+    priority: 1
+    max_samples: 50000
+    preprocessing:
+      resize:
+        height: 384
+        width: 384
+      normalize: true
+      augmentation:
+        horizontal_flip: 0.5
+        rotation: 10
+    metadata:
+      description: "COCO 2017图像标题数据集"
+      version: "2017"
+      language: "en"
+  
+  # COCO检测数据集
+  - name: "coco_detection"
+    path: "/path/to/coco/detection.jsonl"
+    task_types: ["OD"]
+    format: "coco"
+    weight: 1.2  # 给检测任务更高权重
+    priority: 1
+    max_samples: 30000
+    preprocessing:
+      resize:
+        height: 384
+        width: 384
+      normalize: true
+      bbox_augmentation:
+        mixup: 0.2
+        cutmix: 0.3
+    metadata:
+      description: "COCO 2017目标检测数据集"
+      version: "2017"
+      num_classes: 80
+  
+  # 自定义中文标题数据集
+  - name: "chinese_captions"
+    path: "/path/to/chinese/captions.jsonl"
+    task_types: ["CAPTION"]
+    format: "custom"
+    weight: 0.8
+    priority: 2
+    max_samples: 20000
+    preprocessing:
+      resize:
+        height: 384
+        width: 384
+      normalize: true
+    metadata:
+      description: "中文图像标题数据集"
+      language: "zh"
+      custom_format: true
+
+# 任务映射配置
+task_mappings:
+  # 图像标题生成任务
+  - task_type: "CAPTION"
+    datasets: ["coco_captions", "chinese_captions"]
+    weights:
+      coco_captions: 0.7
+      chinese_captions: 0.3
+    sampling_strategy: "balanced"
+  
+  # 详细图像标题生成任务
+  - task_type: "DETAILED_CAPTION"
+    datasets: ["coco_captions"]
+    weights:
+      coco_captions: 1.0
+    sampling_strategy: "weighted"
+  
+  # 目标检测任务
+  - task_type: "OD"
+    datasets: ["coco_detection"]
+    weights:
+      coco_detection: 1.0
+    sampling_strategy: "balanced"
+
+# 训练配置
+training:
+  # 基础训练参数
+  num_epochs: 10
+  max_steps: null
+  eval_steps: 500
+  save_steps: 1000
+  logging_steps: 100
+  
+  # 混合精度训练
+  use_fp16: false
+  use_bf16: true
+  
+  # 梯度累积
+  gradient_accumulation_steps: 2
+  
+  # 检查点管理
+  save_total_limit: 3
+  load_best_model_at_end: true
+  metric_for_best_model: "eval_loss"
+  greater_is_better: false
+  
+  # 早停配置
+  early_stopping_patience: 5
+  early_stopping_threshold: 0.001
+  
+  # 实验配置
+  tags: ["multitask", "caption", "detection", "demo"]
+  
+  # 模型配置
+  model_config:
+    model_name: "microsoft/Florence-2-large"
+    trust_remote_code: true
+    torch_dtype: "auto"
+    device_map: "auto"
+    attn_implementation: "flash_attention_2"
+    
+    # LoRA配置
+    use_lora: true
+    lora_config:
+      r: 32
+      lora_alpha: 32
+      target_modules:
+        - "q_proj"
+        - "k_proj"
+        - "v_proj"
+        - "o_proj"
+        - "gate_proj"
+        - "up_proj"
+        - "down_proj"
+      lora_dropout: 0.05
+      bias: "none"
+      task_type: "CAUSAL_LM"
+  
+  # 数据配置
+  data_config:
+    batch_size: 4
+    num_workers: 4
+    pin_memory: true
+    shuffle: true
+    drop_last: true
+    
+    # 数据增强
+    use_augmentation: true
+    augmentation_prob: 0.5
+    
+    # 数据平衡
+    use_balanced_sampling: true
+    max_samples_per_task: 100000
+  
+  # 优化器配置
+  optimization_config:
+    learning_rate: 1.0e-5
+    weight_decay: 0.01
+    adam_beta1: 0.9
+    adam_beta2: 0.999
+    adam_epsilon: 1.0e-8
+    max_grad_norm: 1.0
+    
+    # 学习率调度
+    lr_scheduler_type: "cosine"
+    warmup_ratio: 0.1
+    warmup_steps: null
+  
+  # 任务调度配置
+  task_scheduling_config:
+    strategy: "round_robin"  # round_robin, weighted, curriculum
+    temperature: 1.0
+    update_frequency: 100
+    
+    # 课程学习配置
+    curriculum_start_epoch: 0
+    curriculum_end_epoch: 5

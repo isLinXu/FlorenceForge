@@ -1,0 +1,101 @@
+# Florence-2 密集区域描述训练配置
+# 适用于: DENSE_REGION_CAPTION
+
+# 基本训练参数
+num_epochs: 12
+max_steps: null
+eval_steps: 400
+save_steps: 800
+logging_steps: 50
+
+# 输出和日志
+output_dir: "./outputs/florence2_dense_region_caption"
+logging_dir: "./outputs/florence2_dense_region_caption/logs"
+
+# 混合精度训练
+use_fp16: false
+use_bf16: true
+
+# 梯度设置
+gradient_accumulation_steps: 6  # 更大的梯度累积处理复杂的密集描述
+
+# 检查点管理
+save_total_limit: 3
+load_best_model_at_end: true
+metric_for_best_model: "eval_loss"
+greater_is_better: false
+
+# 早停
+early_stopping_patience: 5
+early_stopping_threshold: 0.001
+
+# 实验跟踪
+experiment_name: "florence2_dense_region_caption_training"
+run_name: "dense_region_caption_baseline_v1"
+tags:
+  - "florence2"
+  - "dense_region_caption"
+  - "region_description"
+  - "vision-language"
+  - "structured_output"
+
+# 模型配置
+model_config:
+  model_name: "microsoft/Florence-2-large"  # 使用大模型处理复杂的密集描述
+  trust_remote_code: true
+  torch_dtype: "auto"
+  device_map: "auto"
+  attn_implementation: "flash_attention_2"
+  use_lora: true
+  
+  # LoRA配置 - 针对密集区域描述任务优化
+  lora_config:
+    r: 48  # 中等rank平衡性能和效率
+    lora_alpha: 96
+    target_modules:
+      - "q_proj"
+      - "k_proj"
+      - "v_proj"
+      - "o_proj"
+      - "gate_proj"
+      - "up_proj"
+      - "down_proj"
+    lora_dropout: 0.08
+    bias: "none"
+    task_type: "CAUSAL_LM"
+
+# 数据配置
+data_config:
+  batch_size: 4  # 较小批次以适应复杂的密集描述
+  num_workers: 4
+  pin_memory: true
+  shuffle: true
+  drop_last: true
+  
+  # 数据增强 - 密集区域描述任务适用
+  use_augmentation: true
+  augmentation_prob: 0.3
+  
+  # 数据平衡
+  use_balanced_sampling: true
+  max_samples_per_task: 8000
+
+# 优化配置
+optimization_config:
+  learning_rate: 1.5e-05  # 适中的学习率用于复杂任务
+  weight_decay: 0.01
+  adam_beta1: 0.9
+  adam_beta2: 0.999
+  adam_epsilon: 1.0e-08
+  max_grad_norm: 1.0
+  
+  # 学习率调度
+  lr_scheduler_type: "cosine"
+  warmup_ratio: 0.12
+  warmup_steps: null
+
+# 任务调度配置
+task_scheduling_config:
+  strategy: "weighted"  # 密集区域描述任务使用加权策略
+  temperature: 0.9
+  update_frequency: 120
