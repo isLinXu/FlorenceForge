@@ -1,0 +1,124 @@
+# Florence Forge 数据转换工作流程配置
+# 用于批量数据转换和处理流程自动化
+
+workflow:
+  name: "multi_format_data_conversion"
+  description: "多格式数据转换为Florence-2训练格式"
+  version: "1.0"
+
+# 输入数据源配置
+input_sources:
+  # YOLO格式数据
+  yolo_detection:
+    enabled: true
+    labels_dir: "./data/raw/yolo/labels"
+    images_dir: "./data/raw/yolo/images"
+    classes_file: "./data/raw/yolo/classes.txt"
+    image_ext: ".jpg"
+    task_type: "OD"
+    output_file: "./data/processed/yolo_detection.jsonl"
+    
+  # COCO格式数据
+  coco_detection:
+    enabled: true
+    json_file: "./data/raw/coco/annotations/instances_train2017.json"
+    images_dir: "./data/raw/coco/images/train2017"
+    output_file: "./data/processed/coco_detection.jsonl"
+    
+  # CSV格式图像标题数据
+  csv_captions:
+    enabled: true
+    csv_file: "./data/raw/captions/image_captions.csv"
+    image_column: "image_path"
+    caption_column: "caption"
+    task_type: "CAPTION"
+    output_file: "./data/processed/csv_captions.jsonl"
+    
+  # VOC XML格式数据
+  voc_detection:
+    enabled: false
+    xml_dir: "./data/raw/voc/annotations"
+    images_dir: "./data/raw/voc/images"
+    output_file: "./data/processed/voc_detection.jsonl"
+    
+  # OCR数据
+  ocr_data:
+    enabled: false
+    images_dir: "./data/raw/ocr/images"
+    texts_dir: "./data/raw/ocr/texts"
+    task_type: "OCR"
+    output_file: "./data/processed/ocr_data.jsonl"
+
+# 输出配置
+output:
+  # 合并后的最终训练数据
+  merged_file: "./data/final/florence2_training_data.jsonl"
+  
+  # 数据分割配置
+  split:
+    enabled: true
+    train_ratio: 0.8
+    val_ratio: 0.2
+    train_file: "./data/final/train.jsonl"
+    val_file: "./data/final/val.jsonl"
+    
+  # 数据统计报告
+  statistics:
+    enabled: true
+    output_file: "./data/final/conversion_report.json"
+    
+# 数据处理选项
+processing:
+  # 数据验证
+  validation:
+    enabled: true
+    check_image_exists: true
+    check_image_format: true
+    min_image_size: [32, 32]
+    max_image_size: [4096, 4096]
+    
+  # 数据清理
+  cleaning:
+    enabled: true
+    remove_duplicates: true
+    remove_empty_annotations: true
+    normalize_paths: true
+    
+  # 数据增强（可选）
+  augmentation:
+    enabled: false
+    techniques:
+      - "horizontal_flip"
+      - "rotation"
+      - "brightness"
+    
+# 任务权重配置（用于多任务训练）
+task_weights:
+  CAPTION: 1.0
+  OD: 1.0
+  OCR: 0.5
+  DETAILED_CAPTION: 0.8
+  
+# 日志配置
+logging:
+  level: "INFO"
+  file: "./logs/data_conversion.log"
+  console: true
+  
+# 并行处理配置
+parallel:
+  enabled: true
+  max_workers: 4
+  chunk_size: 1000
+  
+# 错误处理
+error_handling:
+  continue_on_error: true
+  max_errors: 100
+  error_log: "./logs/conversion_errors.log"
+  
+# 缓存配置
+cache:
+  enabled: true
+  cache_dir: "./cache/conversion"
+  ttl_hours: 24

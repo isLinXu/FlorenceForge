@@ -1,0 +1,66 @@
+# Florence-2 Quick Start Configuration
+# 快速开始配置 - 适合初学者和快速测试
+
+# 基本训练设置
+num_epochs: 3
+eval_steps: 100
+save_steps: 200
+logging_steps: 50
+
+# 输出目录
+output_dir: "./outputs/quick_start"
+
+# 混合精度（推荐开启以节省显存）
+use_fp16: false
+use_bf16: true
+
+# 梯度累积（如果显存不足可以增加这个值）
+gradient_accumulation_steps: 2
+
+# 实验信息
+experiment_name: "florence2_quick_start"
+run_name: "test_run"
+tags:
+  - "quick_start"
+  - "test"
+
+# 模型配置
+model_config:
+  model_name: "microsoft/Florence-2-base"  # 使用base模型以节省资源
+  trust_remote_code: true
+  use_lora: true
+  
+  # LoRA配置（轻量化微调）
+  lora_config:
+    r: 16                    # 较小的rank以节省资源
+    lora_alpha: 32
+    target_modules:
+      - "q_proj"
+      - "v_proj"
+    lora_dropout: 0.1
+    bias: "none"
+    task_type: "CAUSAL_LM"
+
+# 数据配置
+data_config:
+  batch_size: 2            # 较小的batch size
+  num_workers: 2
+  pin_memory: true
+  shuffle: true
+  drop_last: false
+  use_augmentation: false
+  use_balanced_sampling: true
+
+# 优化器配置
+optimization_config:
+  learning_rate: 2.0e-05   # 稍高的学习率用于快速收敛
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  lr_scheduler_type: "linear"
+  warmup_ratio: 0.1
+
+# 任务调度
+task_scheduling_config:
+  strategy: "round_robin"
+  temperature: 1.0
+  update_frequency: 50

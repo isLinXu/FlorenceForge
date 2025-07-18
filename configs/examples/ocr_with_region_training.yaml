@@ -1,0 +1,101 @@
+# Florence-2 带区域的OCR训练配置
+# 适用于: OCR_WITH_REGION
+
+# 基本训练参数
+num_epochs: 12
+max_steps: null
+eval_steps: 400
+save_steps: 800
+logging_steps: 50
+
+# 输出和日志
+output_dir: "./outputs/florence2_ocr_with_region"
+logging_dir: "./outputs/florence2_ocr_with_region/logs"
+
+# 混合精度训练
+use_fp16: false
+use_bf16: true
+
+# 梯度设置
+gradient_accumulation_steps: 4
+
+# 检查点管理
+save_total_limit: 3
+load_best_model_at_end: true
+metric_for_best_model: "eval_loss"
+greater_is_better: false
+
+# 早停
+early_stopping_patience: 4
+early_stopping_threshold: 0.001
+
+# 实验跟踪
+experiment_name: "florence2_ocr_with_region_training"
+run_name: "ocr_with_region_baseline_v1"
+tags:
+  - "florence2"
+  - "ocr_with_region"
+  - "text_recognition"
+  - "structured_output"
+  - "document_ai"
+
+# 模型配置
+model_config:
+  model_name: "microsoft/Florence-2-base"
+  trust_remote_code: true
+  torch_dtype: "auto"
+  device_map: "auto"
+  attn_implementation: "flash_attention_2"
+  use_lora: true
+  
+  # LoRA配置 - 针对结构化OCR任务优化
+  lora_config:
+    r: 32
+    lora_alpha: 64
+    target_modules:
+      - "q_proj"
+      - "k_proj"
+      - "v_proj"
+      - "o_proj"
+      - "gate_proj"
+      - "up_proj"
+      - "down_proj"
+    lora_dropout: 0.05
+    bias: "none"
+    task_type: "CAUSAL_LM"
+
+# 数据配置
+data_config:
+  batch_size: 6  # 适中批次处理结构化输出
+  num_workers: 4
+  pin_memory: true
+  shuffle: true
+  drop_last: true
+  
+  # 数据增强 - OCR任务适用
+  use_augmentation: true
+  augmentation_prob: 0.3
+  
+  # 数据平衡
+  use_balanced_sampling: true
+  max_samples_per_task: 12000
+
+# 优化配置
+optimization_config:
+  learning_rate: 2.5e-05  # 适中的学习率用于OCR任务
+  weight_decay: 0.01
+  adam_beta1: 0.9
+  adam_beta2: 0.999
+  adam_epsilon: 1.0e-08
+  max_grad_norm: 1.0
+  
+  # 学习率调度
+  lr_scheduler_type: "cosine"
+  warmup_ratio: 0.1
+  warmup_steps: null
+
+# 任务调度配置
+task_scheduling_config:
+  strategy: "weighted"  # OCR任务使用加权策略
+  temperature: 1.0
+  update_frequency: 100
