@@ -183,6 +183,12 @@ class TrainingConfig:
     early_stopping_patience: int = 5
     early_stopping_threshold: float = 0.001
     
+    # 任务配置
+    tasks: List[str] = field(default_factory=lambda: ["CAPTION"])
+    task_weights: Dict[str, float] = field(default_factory=dict)
+    train_data_path: Optional[str] = None
+    val_data_path: Optional[str] = None
+    
     # 子配置
     model_config: ModelConfig = field(default_factory=ModelConfig)
     data_config: DataConfig = field(default_factory=DataConfig)
@@ -219,6 +225,10 @@ class TrainingConfig:
             "greater_is_better": self.greater_is_better,
             "early_stopping_patience": self.early_stopping_patience,
             "early_stopping_threshold": self.early_stopping_threshold,
+            "tasks": self.tasks,
+            "task_weights": self.task_weights,
+            "train_data_path": self.train_data_path,
+            "val_data_path": self.val_data_path,
             "model_config": self.model_config.to_dict(),
             "data_config": self.data_config.to_dict(),
             "optimization_config": self.optimization_config.to_dict(),

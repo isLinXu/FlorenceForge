@@ -553,6 +553,14 @@ def run_data_conversion(args) -> bool:
                 task_type=args.task_type
             )
             
+        elif args.convert_type == 'ocr-txt':
+            DataFormatConverter.txt_file_ocr_to_florence2(
+                txt_file_path=args.txt_file,
+                image_dir=args.images_dir,
+                output_path=args.output,
+                task_type=args.task_type
+            )
+            
         else:
             logger.error(f"❌ 不支持的转换类型: {args.convert_type}")
             return False
@@ -666,6 +674,15 @@ def run_training_task(
         if overrides:
             _apply_config_overrides(training_config, overrides)
         
+        # 确保训练和验证数据路径被设置
+        if 'train_data' in overrides and overrides['train_data'] is not None:
+            training_config.train_data_path = overrides['train_data']
+            logger.info(f"设置训练数据路径: {training_config.train_data_path}")
+        
+        if 'val_data' in overrides and overrides['val_data'] is not None:
+            training_config.val_data_path = overrides['val_data']
+            logger.info(f"设置验证数据路径: {training_config.val_data_path}")
+        
         # 验证配置
         logger.info("✅ 验证训练配置...")
         if not validate_config(str(actual_config_path)):
@@ -746,6 +763,11 @@ def _apply_config_overrides(config: 'TrainingConfig', overrides: Dict[str, Any])
             logger.info(f"覆盖验证数据路径: {config.val_data_path}")
         
         # 添加任务类型覆盖
+        if 'task_type' in overrides and overrides['task_type'] is not None:
+            config.tasks = [overrides['task_type']]
+            config.task_weights = {overrides['task_type']: 1.0}
+            logger.info(f"覆盖任务类型: {config.tasks}")
+        
         # 处理所有其他以.分隔的覆盖
         for key, value in overrides.items():
             if '.' in key and value is not None:
@@ -1072,6 +1094,19 @@ def create_parser() -> argparse.ArgumentParser:
         help='任务类型'
     )
     
+    # OCR TXT文件转换
+    ocr_txt_parser = convert_subparsers.add_parser('ocr-txt', help='TXT文件OCR数据转换为Florence-2格式')
+    ocr_txt_parser.add_argument('--txt-file', required=True, help='TXT文件路径（格式：图像文件名\tOCR内容）')
+    ocr_txt_parser.add_argument('--images-dir', required=True, help='图像文件目录')
+    ocr_txt_parser.add_argument('--output', '-o', required=True, help='输出文件路径')
+    ocr_txt_parser.add_argument(
+        '--task-type',
+        default='OCR',
+        choices=['OCR',
+        'OCR_WITH_REGION'],
+        help='任务类型'
+    )
+    
     return parser
 
 def main() -> None:
@@ -1104,9 +1139,9 @@ def main() -> None:
         if args.model:
             overrides['model'] = args.model
         if hasattr(args, 'train_data') and args.train_data:
-            overrides['train_data_path'] = args.train_data
+            overrides['train_data'] = args.train_data
         if hasattr(args, 'val_data') and args.val_data:
-            overrides['val_data_path'] = args.val_data
+            overrides['val_data'] = args.val_data
         if args.device:
             overrides['device'] = args.device
         
