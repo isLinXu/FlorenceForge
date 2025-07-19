@@ -60,13 +60,73 @@ YOLO 格式数据转换的 Shell 脚本。
 ./convert/convert_yolo.sh input_dir output_dir config.yaml
 ```
 
+#### convert_ocr.sh
+OCR 数据转换的 Shell 脚本。
+
+**功能：**
+- 将txt格式的OCR数据转换为Florence-2格式
+- 自动处理图像文件名和OCR内容的映射
+- 临时文件管理和清理
+
+**使用示例：**
+```bash
+# 转换OCR数据
+./convert/convert_ocr.sh ocr_data.txt ./images ./output.jsonl
+```
+
+### convert_ocr_from_txt.py
+Python版本的OCR数据转换工具，提供更好的跨平台兼容性和错误处理。
+
+**功能特性：**
+- 解析制表符分隔的txt文件
+- 支持OCR和OCR_WITH_REGION任务类型
+- 详细的错误处理和进度显示
+- 自动临时文件管理
+
+**使用示例：**
+```bash
+# 基本OCR转换
+python convert_ocr_from_txt.py ocr_data.txt ./images ./output.jsonl
+
+# 带区域的OCR转换
+python convert_ocr_from_txt.py ocr_data.txt ./images ./output.jsonl --task-type OCR_WITH_REGION
+
+# 查看帮助
+python convert_ocr_from_txt.py --help
+```
+
+### florence_forge_cli convert ocr-txt
+
+**新增功能**：现在可以直接使用florence_forge_cli的convert命令进行OCR TXT数据转换，无需使用独立脚本。
+
+**使用方法：**
+```bash
+florence_forge_cli convert ocr-txt \
+  --txt-file /path/to/ocr_data.txt \
+  --images-dir /path/to/images \
+  --output /path/to/output.jsonl \
+  --task-type OCR
+```
+
+**参数说明：**
+- `--txt-file`: TXT文件路径（格式：图像文件名\tOCR内容）
+- `--images-dir`: 图像文件目录
+- `--output`: 输出文件路径
+- `--task-type`: 任务类型（OCR或OCR_WITH_REGION）
+
 ## 支持的数据格式
 
 ### 输入格式
-- **COCO**: Microsoft COCO 数据集格式
-- **YOLO**: YOLO 标注格式
-- **Pascal VOC**: Pascal VOC XML 格式
-- **自定义 JSON**: 用户自定义的 JSON 格式
+
+| 格式 | 描述 | 转换方式 |
+|------|------|----------|
+| YOLO | YOLO格式的目标检测数据 | `florence_forge_cli convert yolo`, `batch_data_conversion.py` |
+| COCO | COCO格式的目标检测和分割数据 | `florence_forge_cli convert coco`, `batch_data_conversion.py` |
+| CSV | CSV格式的图像标题数据 | `florence_forge_cli convert csv`, `batch_data_conversion.py` |
+| XML | VOC XML格式的目标检测数据 | `florence_forge_cli convert xml`, `batch_data_conversion.py` |
+| OCR | OCR数据（独立文本文件） | `florence_forge_cli convert ocr` |
+| OCR TXT | 制表符分隔的OCR数据（图像文件名\tOCR内容） | `florence_forge_cli convert ocr-txt`, `convert_ocr_from_txt.py`, `convert_ocr.sh` |
+| 自定义 JSON | 用户自定义的 JSON 格式 | `batch_data_conversion.py` |
 
 ### 输出格式
 - **Florence**: Florence-2 训练格式
@@ -74,6 +134,8 @@ YOLO 格式数据转换的 Shell 脚本。
 - **CSV**: 逗号分隔值格式
 
 ## 快速开始
+
+### 通用数据转换
 
 1. **准备数据：**
    ```bash
@@ -91,6 +153,40 @@ YOLO 格式数据转换的 Shell 脚本。
    ```bash
    # 检查转换结果
    python data_conversion_examples.py --validate output_data/
+   ```
+
+### OCR数据转换
+
+1. **准备OCR数据：**
+   ```bash
+   # 创建示例OCR数据文件
+   cat > ocr_data.txt << EOF
+   0-浙NJVJLH.jpg	浙NJVJLH
+   1-辽GM06R4.jpg	辽GM06R4
+   2-川G3LGWX.jpg	川G3LGWX
+   EOF
+   ```
+
+2. **运行OCR转换：**
+   ```bash
+   # 推荐使用CLI命令（新增功能）
+   florence_forge_cli convert ocr-txt \
+     --txt-file ocr_data.txt \
+     --images-dir ./images \
+     --output ./output.jsonl \
+     --task-type OCR
+   
+   # 或使用Python脚本转换
+   python convert_ocr_from_txt.py ocr_data.txt ./images ./output.jsonl
+   
+   # 或使用Shell脚本
+   ./convert/convert_ocr.sh ocr_data.txt ./images ./output.jsonl
+   ```
+
+3. **查看转换结果：**
+   ```bash
+   # 检查输出文件
+   head -n 3 output.jsonl
    ```
 
 ## 配置选项
