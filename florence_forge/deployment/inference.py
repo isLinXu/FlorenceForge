@@ -522,14 +522,8 @@ class InferenceEngine:
         if self.preprocessor:
             processed_inputs = self.preprocessor(inputs, task_prompt=task_prompt, text_input=text_input)
         else:
-            # 默认预处理逻辑
-            from ..data.dataset import Florence2Dataset
-            processed_inputs = Florence2Dataset.preprocess_for_inference(
-                [inputs] if not isinstance(inputs, list) else inputs, 
-                task_prompt=task_prompt, 
-                text_input=text_input,
-                processor=self.model.processor
-            )
+            # 默认预处理逻辑 - 直接使用输入，因为Florence2Dataset不存在
+            processed_inputs = inputs
         
         # 检查是否为Florence2模型 - 增强检测逻辑
         is_florence2_model = (
