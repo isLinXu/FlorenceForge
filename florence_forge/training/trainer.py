@@ -63,6 +63,7 @@ from ..data.dataset import MultiTaskDataset
 from ..data.loader import TaskDataLoader
 from .scheduler import TaskScheduler
 from .lora_manager import LoRAManager
+from .model_merger import ModelMerger
 from .visualizer import TrainingVisualizer
 from .monitoring import TrainingMonitor
 
@@ -159,6 +160,7 @@ class MultiTaskTrainer:
         # 组件初始化
         self.task_scheduler = None
         self.lora_manager = None
+        self.model_merger = None
         self.optimizer = None
         self.lr_scheduler = None
         self.train_dataloader = None
@@ -247,9 +249,10 @@ class MultiTaskTrainer:
             config=self.config.task_scheduling_config
         )
         
-        # 设置LoRA管理器
+        # 设置LoRA管理器和模型合并器
         if self.config.model_config.use_lora:
             self.lora_manager = LoRAManager(self.config.model_config.lora_config)
+            self.model_merger = ModelMerger(self.lora_manager)
             
             # 为每个任务创建LoRA配置
             for task_type in task_types:
@@ -855,6 +858,11 @@ class MultiTaskTrainer:
         # 保存LoRA适配器
         if self.lora_manager:
             self.lora_manager.save_adapter(self.model, final_model_dir / "lora_adapters")
+            
+            # 可选：保存合并后的模型
+            if hasattr(self.config, 'save_merged_model') and self.config.save_merged_model:
+                merged_model_dir = final_model_dir / "merged_model"
+                self.save_merged_model(merged_model_dir)
         
         logger.info(f"最终模型已保存到: {final_model_dir}")
     
@@ -923,3 +931,22 @@ class MultiTaskTrainer:
             self.lora_manager.load_manager_state(lora_state_path)
         
         logger.info(f"检查点已加载: {checkpoint_path}")
+    
+    def save_merged_model(self, output_dir: Union[str, Path]) -> None:
+        """保存合并后的模型
+        
+        Args:
+            output_dir: 输出目录
+        """
+        if not self.model_merger:
+            logger.warning("模型合并器未初始化，无法保存合并模型")
+            return
+        
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # 合并并保存模型
+        merged_model = self.model_merger.merge_all_adapters(self.model)
+        self.accelerator.save_model(merged_model, output_dir)
+        
+        logger.info(f"合并后的模型已保存到: {output_dir}")

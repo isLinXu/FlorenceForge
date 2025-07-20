@@ -4,6 +4,7 @@
 """
 
 from .evaluator import MultiTaskEvaluator
+from .benchmark import BenchmarkEvaluator
 from .metrics import (
     MetricCalculator,
     CaptionMetrics,
@@ -15,6 +16,7 @@ from .analyzer import ResultAnalyzer
 
 __all__ = [
     'MultiTaskEvaluator',
+    'BenchmarkEvaluator',
     'MetricCalculator',
     'CaptionMetrics',
     'DetectionMetrics', 
