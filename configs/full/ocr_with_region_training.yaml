@@ -1,0 +1,86 @@
+# Florence-2 OCR带区域任务Full Training配置
+# 适用于: OCR_WITH_REGION
+# 训练模式: Full Training (非LoRA)
+
+# 基本训练参数
+num_epochs: 5
+max_steps: null
+eval_steps: 300
+save_steps: 600
+logging_steps: 50
+
+# 输出和日志
+output_dir: "./outputs/florence2_ocr_with_region_full"
+logging_dir: "./outputs/florence2_ocr_with_region_full/logs"
+
+# 混合精度训练
+use_fp16: false
+use_bf16: true
+
+# 梯度设置 - Full training需要更多梯度累积
+gradient_accumulation_steps: 16
+
+# 检查点管理
+save_total_limit: 2
+load_best_model_at_end: true
+metric_for_best_model: "eval_accuracy"
+greater_is_better: true
+
+# 早停
+early_stopping_patience: 5
+early_stopping_threshold: 0.001
+
+# 实验跟踪
+experiment_name: "florence2_ocr_with_region_full_training"
+run_name: "ocr_with_region_full_baseline_v1"
+tags:
+  - "florence2"
+  - "ocr-with-region"
+  - "text-detection"
+  - "text-recognition"
+  - "full-training"
+
+# 模型配置
+model_config:
+  model_name: "microsoft/Florence-2-base"
+  trust_remote_code: true
+  torch_dtype: "auto"
+  device_map: "auto"
+  attn_implementation: "flash_attention_2"
+  use_lora: false  # 关键设置：禁用LoRA，使用Full Training
+
+# 数据配置
+data_config:
+  batch_size: 1  # Full training显存占用大，使用小batch size
+  num_workers: 2
+  pin_memory: true
+  shuffle: true
+  drop_last: true
+  
+  # 数据增强 - OCR带区域专用
+  use_augmentation: true
+  augmentation_prob: 0.35  # OCR任务可以使用更多增强
+  
+  # 数据平衡
+  use_balanced_sampling: true
+  max_samples_per_task: 12000
+
+# 优化配置
+optimization_config:
+  learning_rate: 1.0e-05  # Full training使用更小的学习率
+  weight_decay: 0.01
+  adam_beta1: 0.9
+  adam_beta2: 0.999
+  adam_epsilon: 1.0e-08
+  max_grad_norm: 1.0
+  
+  # 学习率调度
+  lr_scheduler_type: "cosine"
+  warmup_ratio: 0.15  # 增加预热比例
+  warmup_steps: null
+
+# 任务调度配置
+task_scheduling_config:
+  strategy: "weighted"  # OCR带区域使用加权策略
+  temperature: 1.0
+  update_frequency: 150
