@@ -143,6 +143,13 @@ class TrainingConfig:
     swanlab_project: Optional[str] = None
     swanlab_experiment_name: Optional[str] = None
     
+    # LoRA配置
+    use_lora: bool = False
+    lora_config: Optional[Dict[str, Any]] = None
+    save_merged_model: bool = False  # 是否保存合并后的模型
+    merge_strategy: str = "linear"  # 合并策略: linear, weighted
+    export_formats: List[str] = field(default_factory=lambda: ["pytorch"])  # 导出格式
+    
     # 配置对象（在 __post_init__ 中创建）
     model_config: Optional[ModelConfig] = field(default=None, init=False)
     data_config: Optional[DataConfig] = field(default=None, init=False)

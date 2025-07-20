@@ -6,11 +6,13 @@
 from .trainer import MultiTaskTrainer
 from .scheduler import TaskScheduler
 from .lora_manager import LoRAManager
+from .model_merger import ModelMerger
 
 __all__ = [
     'MultiTaskTrainer',
     'TaskScheduler',
     'LoRAManager',
+    'ModelMerger',
     'TrainingConfig',
     'ConfigManager',
     'create_default_config',

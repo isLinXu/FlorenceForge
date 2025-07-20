@@ -60,18 +60,6 @@ export CUDA_VISIBLE_DEVICES=0
 #   --device {auto,cpu,cuda,cuda:0,cuda:1,cuda:2,cuda:3,mps}, -d {auto,cpu,cuda,cuda:0,cuda:1,cuda:2,cuda:3,mps}
 #                         训练设备 (默认: auto)
 
-# pip install torch==2.5.0 torchvision==0.20.0 torchaudio==2.5.0 --index-url https://download.pytorch.org/whl/cu121
-# python3 -m florence_forge.cli.main train \
-#     --task open_vocabulary_detection \
-#     --config /svap_storage/gatilin/workspaces/working/GatilinLAB/vlm_learning/FlorenceForge/florence_forge/configs/examples/object_detection_training.yaml \
-#     --train-data /svap_storage/gatilin/data/datasets/svap_unidet_train/youtu_vehicle_car_ped_nomotor_3cls/labels/od_yolo_fix.jsonl \
-#     --val-data /svap_storage/gatilin/data/datasets/svap_unidet_train/youtu_vehicle_car_ped_nomotor_3cls/labels/od_yolo_test.jsonl \
-#     --output-dir /svap_storage/gatilin/workspaces/working/GatilinLAB/vlm_learning/FlorenceForge/outputs/florence2_ovd \
-#     --epochs 1 \
-#     --batch-size 32 \
-#     --learning-rate 1e-5
-
-
 python3 -m florence_forge.cli.main train \
     --task caption \
     --config /svap_storage/gatilin/workspaces/working/GatilinLAB/vlm_learning/FlorenceForge/florence_forge/configs/examples/caption_training.yaml \
