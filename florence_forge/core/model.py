@@ -35,6 +35,41 @@ except ImportError:
 
 import logging
 
+def _check_flash_attn_availability() -> bool:
+    """检测 flash_attn 是否可用
+    
+    Returns:
+        bool: True 如果 flash_attn 可用，False 否则
+    """
+    try:
+        import flash_attn
+        return True
+    except ImportError:
+        return False
+
+def _patch_transformers_import_check():
+    """临时修补 transformers 的导入检查以绕过 flash_attn 依赖"""
+    try:
+        from transformers import dynamic_module_utils
+        original_check_imports = dynamic_module_utils.check_imports
+        
+        def patched_check_imports(filename):
+            """修补后的导入检查函数，忽略 flash_attn 依赖"""
+            try:
+                return original_check_imports(filename)
+            except ImportError as e:
+                if 'flash_attn' in str(e):
+                    logger.warning(f"忽略 flash_attn 导入错误: {e}")
+                    return []
+                else:
+                    raise e
+        
+        dynamic_module_utils.check_imports = patched_check_imports
+        return True
+    except Exception as e:
+        logger.warning(f"无法修补 transformers 导入检查: {e}")
+        return False
+
 try:
     from .config import ModelConfig, LoRAConfig, TrainingConfig
 except ImportError:
@@ -107,15 +142,23 @@ class Florence2MultiTaskModel(nn.Module):
         import os
         os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
         
+        # 动态检测 flash_attn 可用性
+        flash_attn_available = _check_flash_attn_availability()
+        if flash_attn_available:
+            attn_implementation = "flash_attention_2"
+            logger.info("检测到 flash_attn 可用，使用 flash_attention_2")
+        else:
+            attn_implementation = "eager"
+            logger.info("flash_attn 不可用，回退到 eager 模式")
+            # 修补 transformers 的导入检查以绕过 flash_attn 依赖
+            _patch_transformers_import_check()
+        
         model_kwargs = {
             "trust_remote_code": self.config.trust_remote_code,
             "device_map": "cpu",  # 强制使用CPU
-            "torch_dtype": torch.float32  # 使用float32避免精度问题
+            "torch_dtype": torch.float32,  # 使用float32避免精度问题
+            "attn_implementation": attn_implementation  # 动态设置注意力实现
         }
-        
-        # 不使用flash attention，因为在CPU上不支持
-        # if self.config.attn_implementation:
-        #     model_kwargs["attn_implementation"] = self.config.attn_implementation
         
         try:
             self.model = AutoModelForCausalLM.from_pretrained(
