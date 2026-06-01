@@ -205,3 +205,47 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# ============================================================================
+# FlorenceForge 项目专属忽略（2026-05-21 起持续更新）
+# ============================================================================
+# 训练/推理产物
+temp/
+output/
+outputs/
+runs/
+evaluation/
+benchmark_cache/
+.benchmarks/
+
+# 推理示例图片与结果（>50MB 不应入库；本地保留即可）
+scripts/infer/images_caption/
+scripts/infer/results_*/
+scripts/infer/cache/
+scripts/training/output/
+scripts/training/runs/
+
+# Session 临时目录（IDE / Codebuddy / Trae 等）
+.session_tmps/
+.codebuddy/
+.trae/
+.workbuddy/
+# macOS
+.DS_Store
+
+# 模型权重（避免误提交）
+*.safetensors
+*.bin
+*.ckpt
+*.pt
+*.pth
+*.onnx
+
+# 数据集与原始数据（按需放开）
+*.h5
+*.hdf5
+*.parquet
+
+# 本地审计/分析快照
+audit_report*.md
+*.session.json

@@ -64,8 +64,30 @@ class TaskScheduler:
         Returns:
             按难度排序的任务列表
         """
-        # 简单的启发式：根据任务复杂度排序
-        task_complexity = {
+        # 从配置中读取任务复杂度（如果提供）
+        if self.config.task_complexity is not None:
+            task_complexity = self.config.task_complexity
+            logger.info(f"使用配置中的任务复杂度: {task_complexity}")
+        else:
+            # 默认复杂度（可被子类或配置文件覆盖）
+            task_complexity = self._get_default_task_complexity()
+        
+        # 按复杂度排序
+        sorted_tasks = sorted(
+            self.task_types,
+            key=lambda x: task_complexity.get(x, 3)
+        )
+        
+        return sorted_tasks
+    
+    @staticmethod
+    def _get_default_task_complexity() -> Dict[str, int]:
+        """获取默认任务复杂度
+        
+        Returns:
+            任务复杂度字典（任务名 -> 复杂度 1-10）
+        """
+        return {
             'CAPTION': 1,
             'DETAILED_CAPTION': 2,
             'MORE_DETAILED_CAPTION': 3,
@@ -81,14 +103,6 @@ class TaskScheduler:
             'CAPTION_TO_PHRASE_GROUNDING': 4,
             'DENSE_REGION_CAPTION': 5
         }
-        
-        # 按复杂度排序
-        sorted_tasks = sorted(
-            self.task_types,
-            key=lambda x: task_complexity.get(x, 3)
-        )
-        
-        return sorted_tasks
     
     def select_task(self, epoch: Optional[int] = None) -> str:
         """选择下一个任务

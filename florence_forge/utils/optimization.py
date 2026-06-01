@@ -10,6 +10,7 @@ import logging
 import time
 import psutil
 import gc
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +84,12 @@ class ModelOptimizer:
                 raise ValueError(f"Unsupported quantization type: {quantization_type}")
             
             quantized_size = self.get_model_size(quantized_model)
-            compression_ratio = original_size / quantized_size
+            # Dynamically quantized layers store packed weights that are not
+            # exposed through ``parameters()``/``buffers()``, so the measured
+            # size can be 0. Guard against dividing by zero in that case.
+            compression_ratio = (
+                original_size / quantized_size if quantized_size > 0 else float("inf")
+            )
             
             optimization_info = {
                 'type': 'quantization',

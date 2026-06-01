@@ -46,7 +46,7 @@ model_config:
   device_map: "auto"
   attn_implementation: "flash_attention_2"
   use_lora: true
-  
+
   # 生产级LoRA配置
   lora_config:
     r: 64                    # 更高的rank获得更好性能
@@ -63,6 +63,12 @@ model_config:
     bias: "none"
     task_type: "CAUSAL_LM"
 
+  # 激活值重计算策略（显存优化）
+  gradient_checkpointing: true                    # 向后兼容开关
+  activation_checkpointing_strategy: "auto"       # none / full / selective / auto
+  checkpoint_target_layers: null                  # 选择性重计算目标层
+  checkpoint_every_n_layers: null                 # 每隔 N 层重计算
+
 # 数据配置
 data_config:
   batch_size: 8
@@ -70,11 +76,15 @@ data_config:
   pin_memory: true
   shuffle: true
   drop_last: true
-  
+
+  # DataLoader 性能调优
+  prefetch_factor: 2
+  persistent_workers: true
+
   # 数据增强
   use_augmentation: true
   augmentation_prob: 0.3
-  
+
   # 数据平衡
   use_balanced_sampling: true
   max_samples_per_task: 10000
@@ -87,7 +97,7 @@ optimization_config:
   adam_beta2: 0.999
   adam_epsilon: 1.0e-08
   max_grad_norm: 1.0
-  
+
   # 学习率调度
   lr_scheduler_type: "cosine"
   warmup_ratio: 0.05       # 较短的warmup
@@ -98,7 +108,24 @@ task_scheduling_config:
   strategy: "weighted"     # 使用加权策略
   temperature: 0.8         # 较低的温度获得更稳定的调度
   update_frequency: 100
-  
+
   # 课程学习
   curriculum_start_epoch: 2
   curriculum_end_epoch: 15
+
+# 分布式训练配置（可选，多卡训练时启用）
+distributed_config:
+  enabled: false            # 设为 true 启用分布式训练
+  strategy: "ddp"           # ddp / fsdp / deepspeed
+  backend: "nccl"
+
+  # FSDP 配置（当 strategy=fsdp 时生效）
+  fsdp_sharding_strategy: "FULL_SHARD"
+  fsdp_auto_wrap_policy: "TRANSFORMER_BASED_WRAP"
+  fsdp_cpu_offload: false
+  fsdp_activation_checkpointing: true
+
+  # DeepSpeed ZeRO 配置（当 strategy=deepspeed 时生效）
+  deepspeed_stage: 2        # ZeRO-2: 优化器状态+梯度分片
+  deepspeed_offload_optimizer: false
+  deepspeed_offload_param: false

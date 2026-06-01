@@ -30,11 +30,13 @@ FlorenceForge - Florence-2多任务微调库
     florence_forge_cli validate --config config.yaml
 """
 
-__version__ = "0.1.0"
+from importlib import import_module, util as importlib_util
+
+__version__ = "1.0.0"
 __author__ = "FlorenceForge Team"
 __email__ = "contact@florenceforge.ai"
 __license__ = "MIT"
-__url__ = "https://github.com/florenceforge/florenceforge"
+__url__ = "https://github.com/florenceforge/florence-forge"
 
 # 版本信息
 VERSION = __version__
@@ -43,37 +45,22 @@ EMAIL = __email__
 LICENSE = __license__
 URL = __url__
 
-# 导入核心组件（可选，避免循环导入）
-try:
-    from .core.config import TrainingConfig
-    from .core.trainer import Trainer
-    from .core.tasks import FLORENCE2_TASKS, TaskCategory
-    
-    # 导入多数据集功能
-    from .data.multi_dataset_manager import MultiDatasetManager, DatasetInfo, TaskDatasetMapping
-    from .training.multi_dataset_trainer import MultiDatasetTrainer
-    
-    # 导入CLI功能
-    from .cli import cli_main, ConfigManager
-    
-    CORE_AVAILABLE = True
-    MULTI_DATASET_AVAILABLE = True
-    CLI_AVAILABLE = True
-except ImportError:
-    # 核心模块不可用时的优雅降级
-    TrainingConfig = None
-    Trainer = None
-    FLORENCE2_TASKS = {}
-    TaskCategory = None
-    MultiDatasetManager = None
-    DatasetInfo = None
-    TaskDatasetMapping = None
-    MultiDatasetTrainer = None
-    cli_main = None
-    ConfigManager = None
-    CORE_AVAILABLE = False
-    MULTI_DATASET_AVAILABLE = False
-    CLI_AVAILABLE = False
+# 轻量级核心导出：避免导入包时级联拉起训练/可视化等重依赖
+from .core.config import TrainingConfig
+from .core.tasks import FLORENCE2_TASKS, TaskCategory
+from .exceptions import (
+    BackendError,
+    ConfigError,
+    DataError,
+    DeploymentError,
+    FlorenceForgeError,
+    SecurityWarning,
+    TrainingError,
+)
+
+CORE_AVAILABLE = True
+MULTI_DATASET_AVAILABLE = importlib_util.find_spec("florence_forge.data.multi_dataset_manager") is not None
+CLI_AVAILABLE = importlib_util.find_spec("florence_forge.cli") is not None
 
 # 公开API
 __all__ = [
@@ -89,6 +76,13 @@ __all__ = [
     'URL',
     'TrainingConfig',
     'Trainer',
+    'FlorenceForgeError',
+    'ConfigError',
+    'DataError',
+    'TrainingError',
+    'BackendError',
+    'DeploymentError',
+    'SecurityWarning',
     'FLORENCE2_TASKS',
     'TaskCategory',
     'MultiDatasetManager',
@@ -104,6 +98,26 @@ __all__ = [
     'print_examples',
     'check_dependencies',
 ]
+
+_LAZY_EXPORTS = {
+    "Trainer": ("florence_forge.training.trainer", "MultiTaskTrainer"),
+    "MultiDatasetManager": ("florence_forge.data.multi_dataset_manager", "MultiDatasetManager"),
+    "DatasetInfo": ("florence_forge.data.multi_dataset_manager", "DatasetInfo"),
+    "TaskDatasetMapping": ("florence_forge.data.multi_dataset_manager", "TaskDatasetMapping"),
+    "MultiDatasetTrainer": ("florence_forge.training.multi_dataset_trainer", "MultiDatasetTrainer"),
+    "cli_main": ("florence_forge.cli", "cli_main"),
+    "ConfigManager": ("florence_forge.cli", "ConfigManager"),
+}
+
+
+def __getattr__(name):
+    if name in _LAZY_EXPORTS:
+        module_name, attr_name = _LAZY_EXPORTS[name]
+        module = import_module(module_name)
+        value = getattr(module, attr_name)
+        globals()[name] = value
+        return value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 def print_info():
     """打印库信息"""

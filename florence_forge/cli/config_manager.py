@@ -96,17 +96,17 @@ class ConfigManager:
             if config.num_epochs <= 0:
                 errors.append("num_epochs 必须大于 0")
             
-            if config.data_config.batch_size <= 0:
+            if config.data_settings.batch_size <= 0:
                 errors.append("batch_size 必须大于 0")
             
-            if config.optimization_config.learning_rate <= 0:
+            if config.optimization_settings.learning_rate <= 0:
                 errors.append("learning_rate 必须大于 0")
             
-            if not config.model_config.model_name:
+            if not config.model_settings.model_name:
                 errors.append("model_name 不能为空")
             
-            if config.model_config.use_lora:
-                if config.model_config.lora_config.r <= 0:
+            if config.model_settings.use_lora:
+                if config.model_settings.lora_config.r <= 0:
                     errors.append("LoRA rank (r) 必须大于 0")
             
             if errors:
@@ -216,13 +216,13 @@ class ConfigManager:
             print("=" * 50)
             print(f"实验名称: {config.experiment_name or 'N/A'}")
             print(f"运行名称: {config.run_name or 'N/A'}")
-            print(f"模型: {config.model_config.model_name}")
-            print(f"使用LoRA: {config.model_config.use_lora}")
-            if config.model_config.use_lora:
-                print(f"LoRA Rank: {config.model_config.lora_config.r}")
+            print(f"模型: {config.model_settings.model_name}")
+            print(f"使用LoRA: {config.model_settings.use_lora}")
+            if config.model_settings.use_lora:
+                print(f"LoRA Rank: {config.model_settings.lora_config.r}")
             print(f"训练轮数: {config.num_epochs}")
-            print(f"批次大小: {config.data_config.batch_size}")
-            print(f"学习率: {config.optimization_config.learning_rate}")
+            print(f"批次大小: {config.data_settings.batch_size}")
+            print(f"学习率: {config.optimization_settings.learning_rate}")
             print(f"输出目录: {config.output_dir}")
             print(f"标签: {', '.join(config.tags) if config.tags else 'N/A'}")
             
@@ -386,21 +386,10 @@ class ConfigManager:
             # 创建YAML配置
             yaml_config = FlorenceForgeYAMLConfig.create_example_config()
             
-            # 转换训练配置
-            yaml_config.training.num_epochs = training_config.num_epochs
-            yaml_config.training.batch_size = training_config.data_config.batch_size
-            yaml_config.training.learning_rate = training_config.optimization_config.learning_rate
-            yaml_config.training.output_dir = training_config.output_dir
-            yaml_config.training.eval_steps = training_config.eval_steps
-            yaml_config.training.save_steps = training_config.save_steps
-            
-            # 转换模型配置
-            yaml_config.training.model_name = training_config.model_config.model_name
-            yaml_config.training.use_lora = training_config.model_config.use_lora
-            if training_config.model_config.use_lora:
-                yaml_config.training.lora_r = training_config.model_config.lora_config.r
-                yaml_config.training.lora_alpha = training_config.model_config.lora_config.lora_alpha
-                yaml_config.training.lora_dropout = training_config.model_config.lora_config.lora_dropout
+            # Preserve the nested schema consumed by FlorenceForgeYAMLConfig.
+            yaml_config.training = training_config.to_dict()
+            yaml_config.output_dir = training_config.output_dir
+            yaml_config.experiment_name = training_config.experiment_name
             
             # 保存YAML配置
             yaml_config.save_to_file(output_path)

@@ -7,15 +7,74 @@ import json
 import numpy as np
 from pathlib import Path
 from typing import Dict, List, Optional, Union, Tuple, Any
-from PIL import Image
-import matplotlib.pyplot as plt
-from matplotlib.patches import Rectangle
-from sklearn.metrics import confusion_matrix
-import seaborn as sns
 
-# 设置matplotlib中文字体
-plt.rcParams['font.sans-serif'] = ['Arial Unicode MS', 'SimHei', 'DejaVu Sans']
-plt.rcParams['axes.unicode_minus'] = False
+from .optional_dependencies import missing_dependency_message
+
+
+def _get_pandas():
+    try:
+        import pandas as pd
+        return pd
+    except ImportError as e:
+        raise ImportError(
+            missing_dependency_message("可视化功能", "pandas")
+        ) from e
+
+
+def _get_pil_image():
+    try:
+        from PIL import Image
+        return Image
+    except ImportError as e:
+        raise ImportError(
+            missing_dependency_message("可视化功能", "Pillow")
+        ) from e
+
+
+def _get_matplotlib():
+    try:
+        import matplotlib.pyplot as plt
+        from matplotlib.patches import Rectangle
+    except ImportError as e:
+        raise ImportError(
+            missing_dependency_message("可视化功能", "matplotlib")
+        ) from e
+
+    # 按需设置 matplotlib 中文字体，避免模块导入时产生副作用
+    plt.rcParams['font.sans-serif'] = ['Arial Unicode MS', 'SimHei', 'DejaVu Sans']
+    plt.rcParams['axes.unicode_minus'] = False
+    return plt, Rectangle
+
+
+def _get_confusion_matrix():
+    try:
+        from sklearn.metrics import confusion_matrix
+        return confusion_matrix
+    except ImportError as e:
+        raise ImportError(
+            missing_dependency_message("混淆矩阵绘制", "scikit-learn")
+        ) from e
+
+
+def _get_seaborn():
+    try:
+        import seaborn as sns
+        return sns
+    except ImportError as e:
+        raise ImportError(
+            missing_dependency_message("该可视化功能", "seaborn")
+        ) from e
+
+
+def _get_plotly():
+    try:
+        from plotly.subplots import make_subplots
+        import plotly.graph_objects as go
+        return make_subplots, go
+    except ImportError as e:
+        raise ImportError(
+            missing_dependency_message("交互式仪表板", "plotly")
+        ) from e
 
 def plot_training_curves(
     metrics_data: Dict[str, List[float]],
@@ -31,6 +90,7 @@ def plot_training_curves(
         title: 图表标题
         figsize: 图像尺寸
     """
+    plt, _ = _get_matplotlib()
     fig, axes = plt.subplots(2, 2, figsize=figsize)
     fig.suptitle(title, fontsize=16)
     
@@ -103,6 +163,7 @@ def plot_task_distribution(
         title: 图表标题
         figsize: 图像尺寸
     """
+    plt, _ = _get_matplotlib()
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=figsize)
     fig.suptitle(title, fontsize=16)
     
@@ -135,7 +196,7 @@ def plot_task_distribution(
     plt.show()
 
 def visualize_detection_results(
-    image: Union[str, Path, Image.Image],
+    image: Union[str, Path, Any],
     detections: List[Dict[str, Any]],
     save_path: Optional[Union[str, Path]] = None,
     title: str = "检测结果",
@@ -152,6 +213,8 @@ def visualize_detection_results(
         figsize: 图像尺寸
         show_confidence: 是否显示置信度
     """
+    Image = _get_pil_image()
+    plt, Rectangle = _get_matplotlib()
     # 加载图像
     if isinstance(image, (str, Path)):
         image = Image.open(image)
@@ -218,7 +281,9 @@ def plot_confusion_matrix(
         title: 图表标题
         figsize: 图像尺寸
     """
-    
+    plt, _ = _get_matplotlib()
+    sns = _get_seaborn()
+    confusion_matrix = _get_confusion_matrix()
     if labels is None:
         labels = sorted(list(set(y_true + y_pred)))
     
@@ -250,6 +315,8 @@ def plot_metric_comparison(
         title: 图表标题
         figsize: 图像尺寸
     """
+    pd = _get_pandas()
+    plt, _ = _get_matplotlib()
     # 转换为DataFrame
     df = pd.DataFrame(metrics_dict).T
     
@@ -306,6 +373,7 @@ def create_evaluation_dashboard(
         save_path: 保存路径
         title: 仪表板标题
     """
+    make_subplots, go = _get_plotly()
     fig = make_subplots(
         rows=2, cols=2,
         subplot_titles=('任务性能', '指标分布', '错误分析', '样本难度'),
@@ -391,6 +459,8 @@ def plot_attention_heatmap(
         title: 图表标题
         figsize: 图像尺寸
     """
+    plt, _ = _get_matplotlib()
+    sns = _get_seaborn()
     plt.figure(figsize=figsize)
     
     sns.heatmap(
@@ -427,6 +497,7 @@ def plot_loss_landscape(
         title: 图表标题
         figsize: 图像尺寸
     """
+    plt, _ = _get_matplotlib()
     fig = plt.figure(figsize=figsize)
     ax = fig.add_subplot(111, projection='3d')
     
@@ -462,6 +533,7 @@ def create_training_report(
         save_dir: 保存目录
         report_name: 报告名称
     """
+    pd = _get_pandas()
     save_dir = Path(save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
     
@@ -563,6 +635,8 @@ class VisualizationManager:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
         # 设置样式
+        plt, _ = _get_matplotlib()
+        sns = _get_seaborn()
         plt.style.use('seaborn-v0_8')
         sns.set_palette("husl")
     

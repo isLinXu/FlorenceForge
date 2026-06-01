@@ -9,12 +9,15 @@
 import torch
 import torch.nn as nn
 import logging
+import os
 import time
 import threading
 import numpy as np
 from pathlib import Path
 from typing import Union, Optional, Callable, List, Dict, Any, Tuple
 from queue import Queue, Empty
+
+from ..utils.torch_serialization import safe_torch_load
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +41,8 @@ class InferenceEngine:
         device: str = "auto",
         batch_size: int = 1,
         use_amp: bool = False,
-        compile_model: bool = False
+        compile_model: bool = False,
+        allow_unsafe_torch_load: bool = False
     ):
         """初始化推理引擎
         
@@ -48,11 +52,14 @@ class InferenceEngine:
             batch_size: 批处理大小
             use_amp: 是否使用自动混合精度
             compile_model: 是否编译模型
+            allow_unsafe_torch_load: 是否允许对本地 .pt/.pth 文件使用
+                weights_only=False 的 pickle 反序列化。仅对可信文件启用。
         """
         self.device = self._setup_device(device)
         self.batch_size = batch_size
         self.use_amp = use_amp
         self.compile_model = compile_model
+        self.allow_unsafe_torch_load = allow_unsafe_torch_load
         
         # 加载模型
         self.model = self._load_model(model)
@@ -71,6 +78,51 @@ class InferenceEngine:
         self.postprocessor: Optional[Callable] = None
         
         logger.info(f"推理引擎初始化完成，设备: {self.device}")
+
+    def _load_torch_file(self, model_identifier: str) -> nn.Module:
+        """安全加载本地 Torch 文件。
+
+        默认使用 weights_only=True，避免对不可信 .pt/.pth 执行 pickle 反序列化。
+        需要加载整模型 pickle 时，调用方必须显式允许，或设置环境变量
+        FLORENCE_FORGE_ALLOW_UNSAFE_TORCH_LOAD=1。
+        """
+        allow_unsafe = self.allow_unsafe_torch_load or (
+            os.environ.get("FLORENCE_FORGE_ALLOW_UNSAFE_TORCH_LOAD") == "1"
+        )
+
+        try:
+            loaded = safe_torch_load(
+                model_identifier,
+                map_location=self.device,
+                context="Inference model",
+            )
+        except Exception as safe_exc:
+            if not allow_unsafe:
+                raise ValueError(
+                    "安全加载本地 Torch 文件失败。FlorenceForge 默认使用 "
+                    "torch.load(weights_only=True)；如果该文件是可信来源的整模型 "
+                    "pickle，请传入 allow_unsafe_torch_load=True 或设置 "
+                    "FLORENCE_FORGE_ALLOW_UNSAFE_TORCH_LOAD=1。"
+                ) from safe_exc
+            logger.warning(
+                "正在使用 weights_only=False 加载本地 Torch 文件。"
+                "这会执行 pickle 反序列化，只应对可信文件启用。"
+            )
+            try:
+                loaded = torch.load(
+                    model_identifier,
+                    map_location=self.device,
+                    weights_only=False,
+                )
+            except TypeError:
+                loaded = torch.load(model_identifier, map_location=self.device)
+
+        if not isinstance(loaded, nn.Module):
+            raise TypeError(
+                f"本地 Torch 文件加载结果是 {type(loaded).__name__}，不是 nn.Module。"
+                "如果这是 state_dict，请先构建模型结构并传入模型实例。"
+            )
+        return loaded
     
     def _parse_florence2_output(self, output_text: str, image_size: Tuple[int, int]) -> List[Dict[str, Any]]:
         """Parse Florence2 model output and scale coordinates.
@@ -88,6 +140,7 @@ class InferenceEngine:
         # The pattern is designed to capture a label followed by four location tokens.
         # Example: `cat<loc_29><loc_43><loc_935><loc_945>`
         pattern = r"(?P<label>[^<]+)<loc_(?P<x1>\d+)><loc_(?P<y1>\d+)><loc_(?P<x2>\d+)><loc_(?P<y2>\d+)>"
+
         
         image_width, image_height = image_size
 
@@ -390,10 +443,14 @@ class InferenceEngine:
         if device == "auto":
             if torch.cuda.is_available():
                 device = "cuda"
-            elif torch.backends.mps.is_available():
-                device = "mps"
             else:
-                device = "cpu"
+                mps_backend = vars(torch.backends).get("mps")
+                mps_available = (
+                    mps_backend is not None
+                    and callable(getattr(mps_backend, "is_available", None))
+                    and mps_backend.is_available()
+                )
+                device = "mps" if mps_available else "cpu"
         
         return torch.device(device)
     
@@ -421,9 +478,9 @@ class InferenceEngine:
                     logger.info("TorchScript模型加载成功")
                 except Exception:
                     # 如果失败，尝试加载状态字典
-                    logger.info("TorchScript加载失败，尝试加载PyTorch状态字典")
-                    loaded_model = torch.load(model_identifier, map_location=self.device)
-                    logger.info("PyTorch状态字典加载成功")
+                    logger.info("TorchScript加载失败，尝试安全加载PyTorch模型文件")
+                    loaded_model = self._load_torch_file(model_identifier)
+                    logger.info("PyTorch模型文件加载成功")
             else:
                 # 处理Hugging Face模型（本地目录或Hub ID）和LoRA模型
                 try:
@@ -450,6 +507,8 @@ class InferenceEngine:
                         logger.info(f"尝试加载Hugging Face模型: {model_identifier}")
                         config = ModelConfig(model_name=model_identifier)
                         loaded_model = Florence2MultiTaskModel(config)
+                        # 显式加载模型和处理器（延迟加载模式）
+                        loaded_model.load()
                         logger.info("Hugging Face模型加载成功")
 
                 except ImportError as e:
@@ -459,6 +518,9 @@ class InferenceEngine:
                     logger.error(f"加载Hugging Face模型 '{model_identifier}' 失败: {e}")
                     raise ValueError(f"无法加载模型。请检查路径或模型ID是否正确，以及是否需要网络连接。")
         
+        if not hasattr(loaded_model, 'eval'):
+            raise TypeError(f"加载结果 {type(loaded_model).__name__} 不支持 eval()，无法用于推理")
+
         # 移动到指定设备
         if hasattr(loaded_model, 'to') and hasattr(loaded_model, '__class__') and 'Florence2MultiTaskModel' in str(loaded_model.__class__):
             # Florence2MultiTaskModel有自己的to方法

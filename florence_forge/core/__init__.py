@@ -1,9 +1,7 @@
-"""FlorenceForge核心模块
+"""FlorenceForge 核心模块导出入口。"""
 
-包含模型、配置和任务定义等核心组件
-"""
+from importlib import import_module
 
-from .model import Florence2MultiTaskModel
 from .config import (
     LoRAConfig,
     ModelConfig,
@@ -11,18 +9,34 @@ from .config import (
     OptimizationConfig,
     TaskSchedulingConfig,
     TrainingConfig,
-    EvaluationConfig
+    EvaluationConfig,
+    DistributedConfig,
 )
 from .tasks import FLORENCE2_TASKS
 
 __all__ = [
-    'Florence2MultiTaskModel',
-    'LoRAConfig',
-    'ModelConfig',
-    'DataConfig',
-    'OptimizationConfig',
-    'TaskSchedulingConfig',
-    'TrainingConfig',
-    'EvaluationConfig',
-    'FLORENCE2_TASKS'
+    "Florence2MultiTaskModel",
+    "LoRAConfig",
+    "ModelConfig",
+    "DataConfig",
+    "OptimizationConfig",
+    "TaskSchedulingConfig",
+    "TrainingConfig",
+    "EvaluationConfig",
+    "DistributedConfig",
+    "FLORENCE2_TASKS",
 ]
+
+_LAZY_EXPORTS = {
+    "Florence2MultiTaskModel": ("florence_forge.core.model", "Florence2MultiTaskModel"),
+}
+
+
+def __getattr__(name):
+    if name in _LAZY_EXPORTS:
+        module_name, attr_name = _LAZY_EXPORTS[name]
+        module = import_module(module_name)
+        value = getattr(module, attr_name)
+        globals()[name] = value
+        return value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

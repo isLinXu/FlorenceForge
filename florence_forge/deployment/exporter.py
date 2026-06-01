@@ -12,6 +12,9 @@ import logging
 import json
 from typing import Union, Optional, Callable, List, Dict, Any
 from pathlib import Path
+
+from ..utils.optional_dependencies import missing_dependency_message
+
 logger = logging.getLogger(__name__)
 
 
@@ -159,6 +162,7 @@ class ModelExporter:
         """
         try:
             import onnx
+            import onnxruntime as ort
             
             # 加载并检查ONNX模型
             onnx_model = onnx.load(str(onnx_path))
@@ -170,7 +174,13 @@ class ModelExporter:
             logger.info("ONNX模型验证通过")
             
         except ImportError:
-            logger.warning("未安装onnx或onnxruntime，跳过模型验证")
+            logger.warning(
+                missing_dependency_message(
+                    "ONNX模型验证",
+                    "onnx, onnxruntime",
+                    "evaluation",
+                )
+            )
         except Exception as e:
             logger.warning(f"ONNX模型验证失败: {e}")
     
@@ -192,6 +202,7 @@ class ModelExporter:
             **kwargs: 其他参数
         """
         try:
+            import tensorrt as trt
             
             save_path = Path(save_path)
             save_path.parent.mkdir(parents=True, exist_ok=True)
@@ -241,9 +252,16 @@ class ModelExporter:
             
             logger.info(f"TensorRT模型已保存到: {save_path}")
         
-        except ImportError:
-            logger.error("未安装TensorRT，无法导出TensorRT模型")
-            raise
+        except ImportError as exc:
+            logger.error(
+                missing_dependency_message(
+                    "TensorRT导出",
+                    "tensorrt",
+                )
+            )
+            raise ImportError(
+                missing_dependency_message("TensorRT导出", "tensorrt")
+            ) from exc
         except Exception as e:
             logger.error(f"TensorRT导出失败: {e}")
             raise
@@ -262,6 +280,7 @@ class ModelExporter:
             **kwargs: 其他参数
         """
         try:
+            import coremltools as ct
             
             save_path = Path(save_path)
             save_path.parent.mkdir(parents=True, exist_ok=True)
@@ -283,9 +302,16 @@ class ModelExporter:
             
             logger.info(f"Core ML模型已保存到: {save_path}")
         
-        except ImportError:
-            logger.error("未安装coremltools，无法导出Core ML模型")
-            raise
+        except ImportError as exc:
+            logger.error(
+                missing_dependency_message(
+                    "Core ML导出",
+                    "coremltools",
+                )
+            )
+            raise ImportError(
+                missing_dependency_message("Core ML导出", "coremltools")
+            ) from exc
         except Exception as e:
             logger.error(f"Core ML导出失败: {e}")
             raise

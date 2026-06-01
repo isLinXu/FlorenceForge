@@ -14,47 +14,24 @@ from pathlib import Path
 from collections import defaultdict
 
 import torch
+import torch.nn as nn
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
-try:
-    from accelerate import Accelerator
-except ImportError:
-    # 如果accelerate不可用，定义占位符
-    class Accelerator:
-        def __init__(self, *args, **kwargs):
-            pass
-        def prepare(self, *args):
-            return args
-        def backward(self, loss):
-            loss.backward()
-        def step(self, optimizer):
-            optimizer.step()
-        def zero_grad(self, optimizer):
-            optimizer.zero_grad()
-        def wait_for_everyone(self):
-            pass
-        def save_state(self, *args, **kwargs):
-            pass
-        def load_state(self, *args, **kwargs):
-            pass
-        def print(self, *args, **kwargs):
-            print(*args, **kwargs)
-        def log(self, *args, **kwargs):
-            pass
-        def end_training(self):
-            pass
-        @property
-        def is_main_process(self):
-            return True
+from ._accelerator_compat import Accelerator
 
-from ..core.model import Florence2MultiTaskModel
 from ..core.config import TrainingConfig
 from ..data.multi_dataset_manager import MultiDatasetManager
 from ..data.dataset import MultiTaskDataset
 from ..data.loader import TaskDataLoader
 from .trainer import MultiTaskTrainer
 from .scheduler import TaskScheduler
+from .gradient_validator import GradientValidator, GradientValidationConfig
+from .memory_monitor import MemoryMonitor, MemoryMonitorConfig
+from ..utils.training_logging import (
+    format_training_step,
+    resolve_total_steps,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -66,16 +43,16 @@ class MultiDatasetTrainer(MultiTaskTrainer):
     
     def __init__(
         self,
-        model: Florence2MultiTaskModel,
+        model: nn.Module,
         dataset_manager: MultiDatasetManager,
         config: Optional[TrainingConfig] = None,
         accelerator: Optional[Accelerator] = None,
         task_types: Optional[List[str]] = None
     ):
         """初始化多数据集训练器
-        
+
         Args:
-            model: Florence2多任务模型
+            model: 多任务模型（Florence2MultiTaskModel 或任何兼容 nn.Module 的模型）
             dataset_manager: 多数据集管理器
             config: 训练配置
             accelerator: Accelerate加速器
@@ -83,6 +60,7 @@ class MultiDatasetTrainer(MultiTaskTrainer):
         """
         self.dataset_manager = dataset_manager
         self.task_types = task_types
+        self.config = config or TrainingConfig()
         
         # 创建训练和验证数据集
         train_dataset, val_dataset, _ = self._create_datasets()
@@ -92,14 +70,43 @@ class MultiDatasetTrainer(MultiTaskTrainer):
             model=model,
             train_dataset=train_dataset,
             val_dataset=val_dataset,
-            config=config,
+            config=self.config,
             accelerator=accelerator
         )
         
         # 多数据集特有的状态
         self.dataset_performance = defaultdict(lambda: defaultdict(list))
+        self.dataset_performance_history_limit = int(
+            getattr(self.config, "dataset_performance_history_limit", 1000) or 0
+        )
         self.dataset_weights = {}
         self.current_dataset_strategy = "balanced"
+        
+        # 梯度验证器（多数据集训练中更重要）
+        opt_settings = self.config.optimization_settings
+        if hasattr(opt_settings, 'max_grad_norm') and opt_settings.max_grad_norm > 0:
+            grad_config = GradientValidationConfig(
+                max_grad_norm_threshold=opt_settings.max_grad_norm * 1.5,  # 稍微宽松一些
+                log_frequency=50,  # 多数据集训练中更频繁的检查
+                stats_save_frequency=200,
+                monitor_layer_gradients=True  # 启用层级监控
+            )
+            self.gradient_validator = GradientValidator(self.model, grad_config)
+        else:
+            self.gradient_validator = None
+        
+        # 内存监控器（多数据集训练中内存压力更大）
+        memory_config = MemoryMonitorConfig(
+            enable_monitoring=True,
+            log_frequency=25,  # 更频繁的内存监控
+            warning_threshold_percent=75.0,  # 更严格的警告阈值
+            critical_threshold_percent=85.0,
+            enable_gpu_monitoring=True,
+            auto_cleanup=True,
+            save_stats=True,
+            enable_continuous_monitoring=False  # 避免过多的监控开销
+        )
+        self.memory_monitor = MemoryMonitor(memory_config)
         
         logger.info("多数据集训练器初始化完成")
     
@@ -194,6 +201,13 @@ class MultiDatasetTrainer(MultiTaskTrainer):
         self.model.train()
         epoch_metrics = defaultdict(list)
         dataset_metrics = defaultdict(lambda: defaultdict(list))
+        if not hasattr(self, "_progress_log_start_time"):
+            self._progress_log_start_time = time.perf_counter()
+        total_steps = resolve_total_steps(
+            self.train_dataloader,
+            self.config.num_epochs,
+            self.config.max_steps,
+        )
         
         progress_bar = tqdm(
             self.train_dataloader,
@@ -234,7 +248,7 @@ class MultiDatasetTrainer(MultiTaskTrainer):
             
             # 更新任务和数据集性能
             self.task_scheduler.update_task_performance(task_type, loss.item())
-            self.dataset_performance[dataset_name][task_type].append(loss.item())
+            self._record_dataset_performance(dataset_name, task_type, loss.item())
             
             # 记录步骤指标
             should_log = (
@@ -243,16 +257,35 @@ class MultiDatasetTrainer(MultiTaskTrainer):
                 (self.global_step % max(1, len(self.train_dataloader) // 3) == 0)
             )
             if should_log:
+                grad_norm = self._calculate_grad_norm()
                 self._record_step_metrics(
                     step=self.global_step,
                     epoch=self.current_epoch,
                     task_type=task_type,
                     loss=loss.item(),
                     learning_rate=current_lr,
-                    grad_norm=self._calculate_grad_norm(),
+                    grad_norm=grad_norm,
                     time_per_step=step_time,
                     dataset_name=dataset_name
                 )
+                if self.accelerator.is_local_main_process:
+                    logger.info(
+                        format_training_step(
+                            completed_step=self.global_step + 1,
+                            total_steps=total_steps,
+                            epoch=self.current_epoch + 1,
+                            total_epochs=self.config.num_epochs,
+                            metrics={
+                                "loss": loss.item(),
+                                "learning_rate": current_lr,
+                                "grad_norm": grad_norm,
+                                "time_per_step": step_time,
+                            },
+                            task_type=task_type,
+                            dataset_name=dataset_name,
+                            elapsed_seconds=time.perf_counter() - self._progress_log_start_time,
+                        )
+                    )
             
             # 更新进度条
             progress_bar.set_postfix({
@@ -293,6 +326,23 @@ class MultiDatasetTrainer(MultiTaskTrainer):
         self._adjust_dataset_weights(dataset_metrics)
         
         return avg_metrics
+
+    def _record_dataset_performance(
+        self,
+        dataset_name: str,
+        task_type: str,
+        loss: float,
+    ) -> None:
+        """记录数据集-任务级 loss，并限制内存历史长度。"""
+        losses = self.dataset_performance[dataset_name][task_type]
+        losses.append(loss)
+        if (
+            self.dataset_performance_history_limit > 0
+            and len(losses) > self.dataset_performance_history_limit
+        ):
+            del losses[:-self.dataset_performance_history_limit]
+        elif self.dataset_performance_history_limit == 0:
+            losses.clear()
     
     def _extract_task_type(self, sample: Dict[str, Any]) -> str:
         """从样本中提取任务类型"""
@@ -337,10 +387,10 @@ class MultiDatasetTrainer(MultiTaskTrainer):
             self.accelerator.backward(loss)
             
             # 梯度裁剪
-            if self.config.optimization_config.max_grad_norm > 0:
+            if self.config.optimization_settings.max_grad_norm > 0:
                 self.accelerator.clip_grad_norm_(
                     self.model.parameters(),
-                    self.config.optimization_config.max_grad_norm
+                    self.config.optimization_settings.max_grad_norm
                 )
             
             # 优化器步骤
@@ -351,7 +401,7 @@ class MultiDatasetTrainer(MultiTaskTrainer):
     
     def _calculate_grad_norm(self) -> float:
         """计算梯度范数"""
-        if self.config.optimization_config.max_grad_norm <= 0:
+        if self.config.optimization_settings.max_grad_norm <= 0:
             return 0.0
         
         total_norm = 0.0
@@ -491,7 +541,7 @@ class MultiDatasetTrainer(MultiTaskTrainer):
         Returns:
             训练结果字典
         """
-        logger.info("开始多数据集多任务训练...")
+        logger.info("[data] preparing multi-dataset training configuration")
         
         # 保存数据集配置
         config_path = self.output_dir / "dataset_config.json"
@@ -507,27 +557,26 @@ class MultiDatasetTrainer(MultiTaskTrainer):
         result["dataset_performance"] = self.get_dataset_performance_summary()
         result["dataset_statistics"] = self.dataset_manager.get_dataset_statistics()
         
-        logger.info("多数据集多任务训练完成")
         return result
     
     @classmethod
     def from_config(
         cls,
-        model: Florence2MultiTaskModel,
+        model: nn.Module,
         dataset_config_path: Union[str, Path],
         training_config: Optional[TrainingConfig] = None,
         task_types: Optional[List[str]] = None,
         accelerator: Optional[Accelerator] = None
     ) -> 'MultiDatasetTrainer':
         """从配置文件创建训练器
-        
+
         Args:
-            model: Florence2多任务模型
+            model: 多任务模型（Florence2MultiTaskModel 或任何兼容 nn.Module 的模型）
             dataset_config_path: 数据集配置文件路径
             training_config: 训练配置
             task_types: 要训练的任务类型列表
             accelerator: Accelerate加速器
-            
+
         Returns:
             多数据集训练器实例
         """

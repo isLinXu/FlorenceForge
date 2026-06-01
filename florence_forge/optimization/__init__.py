@@ -1,13 +1,11 @@
-"""模型优化模块"""
+"""模型优化模块
 
-from .quantization import ModelQuantizer
-from .pruning import ModelPruner
-from .distillation import KnowledgeDistillation
-from .optimization_utils import OptimizationUtils
+提供模型量化、压缩和推理优化功能。
+"""
+
+from .quantization import ModelQuantizer, QuantizationConfig
 
 __all__ = [
     'ModelQuantizer',
-    'ModelPruner',
-    'KnowledgeDistillation',
-    'OptimizationUtils'
+    'QuantizationConfig',
 ]

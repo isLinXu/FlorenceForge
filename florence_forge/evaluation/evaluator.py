@@ -6,15 +6,19 @@
 import json
 import time
 import logging
+from typing import Optional, Dict, Any, Union, List
+from pathlib import Path
+from collections import defaultdict
 
 import torch
+import torch.nn as nn
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
-from ..core.model import Florence2MultiTaskModel
 from ..core.tasks import FLORENCE2_TASKS
+from ..data.collate import Florence2Collator
 from ..data.dataset import MultiTaskDataset
-from ..data.loader import TaskDataLoader
+from .metrics import get_metric_calculator
 
 logger = logging.getLogger(__name__)
 
@@ -26,27 +30,181 @@ class MultiTaskEvaluator:
     
     def __init__(
         self,
-        model: Florence2MultiTaskModel,
+        model: nn.Module,
         device: Optional[torch.device] = None
     ):
         """初始化评估器
-        
+
         Args:
-            model: Florence2多任务模型
+            model: 多任务模型（需实现 generate 和 processor 接口）
             device: 计算设备
         """
         self.model = model
-        self.device = device or torch.device('cpu')  # 强制使用CPU
-        
+        self.device = self._resolve_device(device)
+
+        # 运行时检查模型是否具备评估所需的接口
+        if not hasattr(model, 'generate'):
+            raise TypeError(f"评估器要求模型实现 generate() 方法，但 {type(model).__name__} 未提供")
+        if not callable(self._safe_getattr(model, 'decode')) and self._safe_getattr(model, 'processor') is None:
+            raise TypeError(
+                f"评估器要求模型实现 decode() 方法或具备 processor 属性，"
+                f"但 {type(model).__name__} 未提供"
+            )
+
         # 将模型移到指定设备
         self.model.to(self.device)
-        
+
         # 评估结果存储
         self.evaluation_results = {}
         self.task_metrics = {}
-        
+
         logger.info(f"多任务评估器初始化完成，使用设备: {self.device}")
-    
+
+    def _safe_getattr(self, obj: Any, name: str, default: Any = None) -> Any:
+        """安全获取属性，避免未加载 processor 等 RuntimeError 打断接口检测。"""
+        try:
+            return getattr(obj, name)
+        except (AttributeError, RuntimeError):
+            return default
+
+    def _decode_token_ids(
+        self,
+        token_ids: torch.Tensor,
+        skip_special_tokens: bool = True,
+    ) -> List[str]:
+        """解码 token ids，优先使用模型级 decode，回退到 processor.batch_decode。"""
+        decode = self._safe_getattr(self.model, 'decode')
+        if callable(decode):
+            return decode(token_ids, skip_special_tokens=skip_special_tokens)
+
+        processor = self._safe_getattr(self.model, 'processor')
+        if processor is not None and hasattr(processor, 'batch_decode'):
+            return processor.batch_decode(token_ids, skip_special_tokens=skip_special_tokens)
+
+        raise RuntimeError("模型未提供 decode() 或 processor.batch_decode()，无法解码评估结果")
+
+    def _get_batch_task_types(self, batch: Dict[str, Any]) -> List[str]:
+        """返回与 batch size 对齐的任务类型列表。"""
+        task_types = batch.get('task_types')
+        if task_types:
+            return list(task_types)
+
+        task_type = batch.get('task_type')
+        if isinstance(task_type, list):
+            return task_type
+        if isinstance(task_type, str):
+            batch_size = batch['input_ids'].shape[0]
+            return [task_type] * batch_size
+        return []
+
+    def _get_reference_ids(self, batch: Dict[str, Any]) -> Optional[torch.Tensor]:
+        """获取参考答案 token，避免在 Tensor 上使用布尔 or。"""
+        reference_ids = batch.get('labels')
+        if reference_ids is None:
+            reference_ids = batch.get('reference_ids')
+        if isinstance(reference_ids, torch.Tensor):
+            pad_token_id = self._resolve_pad_token_id()
+            reference_ids = reference_ids.clone()
+            reference_ids[reference_ids == -100] = pad_token_id
+        return reference_ids
+
+    def _resolve_pad_token_id(self) -> int:
+        """解析模型 processor/tokenizer 的 pad_token_id，找不到时回退 0。"""
+        processor = self._safe_getattr(self.model, 'processor')
+        tokenizer = getattr(processor, 'tokenizer', None) if processor is not None else None
+        pad_token_id = getattr(
+            processor,
+            'pad_token_id',
+            getattr(tokenizer, 'pad_token_id', 0) or 0,
+        )
+        try:
+            return int(pad_token_id)
+        except (TypeError, ValueError):
+            return 0
+
+    def _extract_generated_tokens(
+        self,
+        generated_ids: torch.Tensor,
+        input_ids: torch.Tensor,
+    ) -> torch.Tensor:
+        """只在模型返回完整 prompt+answer 序列时剥离 prompt tokens。
+
+        Encoder-decoder 模型通常只返回新生成 tokens；decoder-only 风格模型可能返回
+        prompt + generated tokens。盲目按 input length 裁剪会把前者裁成空序列。
+        """
+        if not isinstance(generated_ids, torch.Tensor) or not isinstance(input_ids, torch.Tensor):
+            return generated_ids
+        if generated_ids.dim() != 2 or input_ids.dim() != 2:
+            return generated_ids
+
+        input_len = input_ids.shape[1]
+        if generated_ids.shape[1] <= input_len:
+            return generated_ids
+
+        prefix = generated_ids[:, :input_len]
+        try:
+            input_for_compare = input_ids.to(prefix.device)
+            if torch.equal(prefix, input_for_compare):
+                return generated_ids[:, input_len:]
+        except Exception:
+            logger.debug("无法比较生成结果前缀，保留完整生成序列", exc_info=True)
+
+        return generated_ids
+
+    def _resolve_device(self, device) -> torch.device:
+        """解析设备参数，支持 auto / 字符串 / torch.device"""
+        import torch
+        if device is None or device == "auto":
+            if torch.cuda.is_available():
+                return torch.device(f"cuda:{torch.cuda.current_device()}")
+            elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+                return torch.device("mps")
+            else:
+                return torch.device("cpu")
+        if isinstance(device, str):
+            return torch.device(device)
+        return device
+
+    def _get_collate_fn(self, dataset: MultiTaskDataset):
+        """返回数据集 collate_fn，兼容旧数据集对象。
+
+        回退构造 Florence2Collator 时使用模型实际的 pad_token_id，
+        避免硬编码 0 在非零 pad token 的模型上导致 padding 错位。
+        """
+        collate_fn = getattr(dataset, "collate_fn", None)
+        if collate_fn is not None:
+            return collate_fn
+        return Florence2Collator(pad_token_id=self._resolve_pad_token_id())
+
+    def _resolve_num_workers(self, dataset: MultiTaskDataset, num_workers: int) -> int:
+        """避免 DataLoader worker 丢失 processor/backend 后返回未编码样本。"""
+        if num_workers <= 0:
+            return num_workers
+
+        if getattr(dataset, "processor", None) is not None or getattr(dataset, "backend", None) is not None:
+            logger.warning(
+                "评估数据集依赖 processor/backend 在线编码，已将 num_workers 设为 0，"
+                "避免 worker 序列化后丢失编码器。"
+            )
+            return 0
+        return num_workers
+
+    def _make_dataloader(
+        self,
+        dataset: MultiTaskDataset,
+        batch_size: int,
+        shuffle: bool = False,
+        num_workers: int = 0,
+    ) -> DataLoader:
+        """创建评估 DataLoader，并应用与训练数据加载器一致的 worker 安全策略。"""
+        return DataLoader(
+            dataset,
+            batch_size=batch_size,
+            shuffle=shuffle,
+            num_workers=self._resolve_num_workers(dataset, num_workers),
+            collate_fn=self._get_collate_fn(dataset),
+        )
+
     def evaluate_dataset(
         self,
         dataset: MultiTaskDataset,
@@ -75,12 +233,11 @@ class MultiTaskEvaluator:
         self.model.eval()
         
         # 创建数据加载器
-        dataloader = DataLoader(
+        dataloader = self._make_dataloader(
             dataset,
             batch_size=batch_size,
             shuffle=False,
             num_workers=num_workers,
-            collate_fn=dataset.collate_fn
         )
         
         # 按任务组织指标计算器
@@ -105,7 +262,7 @@ class MultiTaskEvaluator:
                         for k, v in batch.items()}
                 
                 # 获取批次中的任务类型
-                batch_task_types = batch.get('task_types', [])
+                batch_task_types = self._get_batch_task_types(batch)
                 
                 # 生成预测
                 predictions = self.model.generate(
@@ -116,16 +273,18 @@ class MultiTaskEvaluator:
                     do_sample=False
                 )
                 
-                # 解码预测结果
-                decoded_predictions = self.model.processor.batch_decode(
-                    predictions, skip_special_tokens=True
-                )
+                # 解码预测结果：仅在生成结果确实包含 prompt 前缀时剥离
+                new_tokens = self._extract_generated_tokens(predictions, batch['input_ids'])
+                decoded_predictions = self._decode_token_ids(new_tokens, skip_special_tokens=True)
                 
                 # 解码参考答案
-                reference_ids = batch.get('labels', batch['input_ids'])
-                decoded_references = self.model.processor.batch_decode(
-                    reference_ids, skip_special_tokens=True
-                )
+                # 优先使用 labels（包含 answer 部分的 token），其次使用专门存储的 reference_ids
+                reference_ids = self._get_reference_ids(batch)
+                if reference_ids is None:
+                    # 如果没有参考答案，无法计算指标，跳过该批次
+                    logger.warning("批次缺少 labels/reference_ids，跳过指标计算")
+                    continue
+                decoded_references = self._decode_token_ids(reference_ids, skip_special_tokens=True)
                 
                 # 按任务类型组织结果
                 for i, (pred, ref, task_type) in enumerate(
@@ -222,11 +381,11 @@ class MultiTaskEvaluator:
             return {}
         
         # 创建数据加载器
-        dataloader = DataLoader(
+        dataloader = self._make_dataloader(
             task_subset,
             batch_size=batch_size,
             shuffle=False,
-            collate_fn=dataset.collate_fn
+            num_workers=0,
         )
         
         # 创建指标计算器
@@ -255,15 +414,15 @@ class MultiTaskEvaluator:
                     do_sample=False
                 )
                 
-                # 解码结果
-                batch_predictions = self.model.processor.batch_decode(
-                    pred_ids, skip_special_tokens=True
-                )
+                # 解码结果：仅在生成结果确实包含 prompt 前缀时剥离
+                new_tokens = self._extract_generated_tokens(pred_ids, batch['input_ids'])
+                batch_predictions = self._decode_token_ids(new_tokens, skip_special_tokens=True)
                 
-                reference_ids = batch.get('labels', batch['input_ids'])
-                batch_references = self.model.processor.batch_decode(
-                    reference_ids, skip_special_tokens=True
-                )
+                reference_ids = self._get_reference_ids(batch)
+                if reference_ids is None:
+                    logger.warning("批次缺少 labels/reference_ids，跳过指标计算")
+                    continue
+                batch_references = self._decode_token_ids(reference_ids, skip_special_tokens=True)
                 
                 # 清理和收集结果
                 for pred, ref in zip(batch_predictions, batch_references):
@@ -330,30 +489,130 @@ class MultiTaskEvaluator:
             result['metrics'] = metrics
         
         return result
+
+    def export_bad_cases(
+        self,
+        results: Union[List[Dict[str, Any]], Dict[str, Any]],
+        threshold: float = 0.5,
+        output_dir: Union[str, Path] = "bad_cases",
+        filename: str = "bad_cases.jsonl",
+    ) -> Path:
+        """导出低分样本为 JSONL，便于回流标注。
+
+        Args:
+            results: per-sample 结果列表，或包含 predictions/references 的评估结果字典
+            threshold: 分数小于等于该阈值的样本会被导出
+            output_dir: 输出目录
+            filename: JSONL 文件名
+
+        Returns:
+            写入的 JSONL 文件路径
+        """
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+        bad_case_path = output_path / filename
+
+        bad_cases = []
+        for sample_id, item in enumerate(self._iter_result_items(results)):
+            score = self._infer_case_score(item)
+            is_bad = bool(item.get("is_bad", False)) or (score is not None and score <= threshold)
+            if not is_bad:
+                continue
+
+            bad_cases.append({
+                "sample_id": item.get("sample_id", sample_id),
+                "task_type": item.get("task_type"),
+                "prediction": item.get("prediction"),
+                "reference": item.get("reference"),
+                "score": score,
+                "threshold": threshold,
+                "metadata": item.get("metadata", {}),
+            })
+
+        with open(bad_case_path, "w", encoding="utf-8") as f:
+            for item in bad_cases:
+                f.write(json.dumps(item, ensure_ascii=False, default=str) + "\n")
+
+        logger.info(f"已导出 {len(bad_cases)} 个 bad case 到: {bad_case_path}")
+        return bad_case_path
+
+    def _iter_result_items(
+        self,
+        results: Union[List[Dict[str, Any]], Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """将不同评估结果形态规范化为 per-sample 字典列表。"""
+        if isinstance(results, list):
+            return [item for item in results if isinstance(item, dict)]
+
+        if not isinstance(results, dict):
+            return []
+
+        predictions = results.get("predictions")
+        references = results.get("references")
+        if isinstance(predictions, list) and isinstance(references, list):
+            task_type = results.get("task_type")
+            return [
+                {
+                    "sample_id": idx,
+                    "task_type": task_type,
+                    "prediction": pred,
+                    "reference": ref,
+                }
+                for idx, (pred, ref) in enumerate(zip(predictions, references))
+            ]
+
+        items = results.get("items") or results.get("samples") or results.get("bad_cases")
+        if isinstance(items, list):
+            return [item for item in items if isinstance(item, dict)]
+
+        return []
+
+    def _infer_case_score(self, item: Dict[str, Any]) -> Optional[float]:
+        """从样本结果中推断一个用于筛选 bad case 的分数。"""
+        for key in ("score", "metric", "accuracy", "f1", "exact_match"):
+            value = item.get(key)
+            if isinstance(value, (int, float, bool)):
+                return float(value)
+
+        metrics = item.get("metrics")
+        if isinstance(metrics, dict):
+            for key in ("score", "accuracy", "f1", "exact_match", "bleu", "rouge1_f1"):
+                value = metrics.get(key)
+                if isinstance(value, (int, float, bool)):
+                    return float(value)
+
+        prediction = item.get("prediction")
+        reference = item.get("reference")
+        if prediction is not None and reference is not None:
+            return float(str(prediction).strip() == str(reference).strip())
+
+        return None
     
     def _clean_prediction(self, prediction: str, task_type: str) -> str:
-        """清理预测结果
-        
+        """清理预测结果（移除 prompt tokens 保留纯答案）
+
+        Florence-2 的 generate() 会返回完整序列（prompt + answer），
+        需要从结果中移除 prompt 部分，只保留真正的预测答案。
+
         Args:
             prediction: 原始预测结果
             task_type: 任务类型
-            
+
         Returns:
             清理后的预测结果
         """
-        # 移除特殊标记
         cleaned = prediction.strip()
-        
+
         # 根据任务类型进行特定清理
         if task_type in FLORENCE2_TASKS:
             task_config = FLORENCE2_TASKS[task_type]
-            
-            # 移除任务前缀
-            if 'prefix' in task_config and task_config['prefix']:
-                prefix = task_config['prefix']
+
+            # 移除任务 prompt
+            prefix = task_config.get("prompt")
+            if prefix:
                 if cleaned.startswith(prefix):
                     cleaned = cleaned[len(prefix):].strip()
-        
+
         return cleaned
     
     def _clean_reference(self, reference: str, task_type: str) -> str:
@@ -372,10 +631,10 @@ class MultiTaskEvaluator:
         # 根据任务类型进行特定清理
         if task_type in FLORENCE2_TASKS:
             task_config = FLORENCE2_TASKS[task_type]
-            
-            # 移除任务前缀
-            if 'prefix' in task_config and task_config['prefix']:
-                prefix = task_config['prefix']
+
+            # 移除任务 prompt
+            prefix = task_config.get("prompt")
+            if prefix:
                 if cleaned.startswith(prefix):
                     cleaned = cleaned[len(prefix):].strip()
         
