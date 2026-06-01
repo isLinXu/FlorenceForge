@@ -27,7 +27,7 @@ Florence Forge CLI - 命令行接口
 import argparse
 import sys
 import os
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, List
 from pathlib import Path
 
 # 在导入torch之前设置MPS设备配置
@@ -40,34 +40,7 @@ import logging
 import yaml
 from datetime import datetime
 
-# 添加transformers导入
-try:
-    from transformers import AutoProcessor
-except ImportError:
-    AutoProcessor = None
-
-# 简化导入，避免循环依赖
-try:
-    from florence_forge.core.config import TrainingConfig
-    from florence_forge.core.tasks import FLORENCE2_TASKS, TaskCategory, list_all_tasks
-    from florence_forge.core.model import Florence2MultiTaskModel
-    from florence_forge.training.trainer import MultiTaskTrainer
-    from florence_forge.training.config import load_config_from_file
-    from florence_forge.data.dataset import MultiTaskDataset
-    from florence_forge.data.loader import TaskDataLoader
-    CORE_AVAILABLE = True
-except ImportError as e:
-    print(f"警告: 无法导入核心配置模块: {e}")
-    TrainingConfig = None
-    FLORENCE2_TASKS = {}
-    TaskCategory = None
-    list_all_tasks = None
-    Florence2MultiTaskModel = None
-    MultiTaskTrainer = None
-    load_config_from_file = None
-    MultiTaskDataset = None
-    TaskDataLoader = None
-    CORE_AVAILABLE = False
+from florence_forge.utils.diagnostics import DEFAULT_MODEL_ID, collect_environment_diagnostics
 
 # 设置基础日志
 logging.basicConfig(
@@ -77,48 +50,106 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-# 预定义的任务配置映射
-TASK_CONFIG_MAPPING = {
-    'caption': 'configs/examples/caption_training.yaml',
-    'detailed_caption': 'configs/examples/detailed_caption_training.yaml',
-    'more_detailed_caption': 'configs/examples/more_detailed_caption_training.yaml',
-    'detection': 'configs/examples/object_detection_training.yaml',
-    'od': 'configs/examples/object_detection_training.yaml',
-    'open_vocabulary_detection': 'configs/examples/open_vocabulary_detection_training.yaml',
-    'phrase_grounding': 'configs/examples/phrase_grounding_training.yaml',
-    'dense_region_caption': 'configs/examples/dense_region_caption_training.yaml',
-    'region_proposal': 'configs/examples/region_proposal_training.yaml',
-    'region_to_category': 'configs/examples/region_to_category_training.yaml',
-    'region_to_description': 'configs/examples/region_to_description_training.yaml',
-    'ocr': 'configs/examples/ocr_training.yaml',
-    'ocr_with_region': 'configs/examples/ocr_with_region_training.yaml',
-    'segmentation': 'configs/examples/segmentation_training.yaml',
-    'seg': 'configs/examples/segmentation_training.yaml',
-    'region_to_segmentation': 'configs/examples/region_to_segmentation_training.yaml',
-    'referring_expression_segmentation': 'configs/examples/referring_expression_segmentation_training.yaml',
-    'multitask': 'configs/examples/multitask_training.yaml',
-    'multi': 'configs/examples/multitask_training.yaml'
-}
+# 共享常量 / 纯辅助函数（抽离至 _helpers，便于复用且避免循环导入）。
+# 这些名称在此重新导出，保持 `florence_forge.cli.main.xxx` 历史导入路径兼容。
+from ._helpers import (  # noqa: E402
+    SUPPORTED_IMAGE_EXTENSIONS,
+    TASK_CONFIG_MAPPING,
+    TASK_DESCRIPTIONS,
+    _is_supported_image_file,
+    _iter_image_files,
+    _normalize_inference_stats,
+)
 
-# 任务描述
-TASK_DESCRIPTIONS = {
-    'caption': '基础图像描述生成任务 (CAPTION)',
-    'detailed_caption': '详细图像描述生成任务 (DETAILED_CAPTION)',
-    'more_detailed_caption': '更详细图像描述生成任务 (MORE_DETAILED_CAPTION)',
-    'detection': '标准目标检测任务 (OD)',
-    'open_vocabulary_detection': '开放词汇目标检测任务 (OPEN_VOCABULARY_DETECTION)',
-    'phrase_grounding': '短语定位任务 (CAPTION_TO_PHRASE_GROUNDING)',
-    'dense_region_caption': '密集区域描述任务 (DENSE_REGION_CAPTION)',
-    'region_proposal': '区域提议任务 (REGION_PROPOSAL)',
-    'region_to_category': '区域到类别分类任务 (REGION_TO_CATEGORY)',
-    'region_to_description': '区域到描述生成任务 (REGION_TO_DESCRIPTION)',
-    'ocr': 'OCR文字识别任务 (OCR)',
-    'ocr_with_region': '带区域的OCR任务 (OCR_WITH_REGION)',
-    'segmentation': '标准图像分割任务',
-    'region_to_segmentation': '区域到分割任务 (REGION_TO_SEGMENTATION)',
-    'referring_expression_segmentation': '参考表达式分割任务 (REFERRING_EXPRESSION_SEGMENTATION)',
-    'multitask': '多任务混合训练 (CAPTION + OD + OCR + SEGMENTATION)'
-}
+# 重型子命令 handler（抽离至 commands，保持本文件聚焦于参数解析与调度）。
+# 同样重新导出以兼容历史导入路径（含测试中对这些函数的直接 import）。
+from .commands import (  # noqa: E402
+    _apply_config_overrides,
+    _prepare_datasets,
+    _set_nested_attr,
+    run_data_conversion,
+    run_eval_task,
+    run_inference_task,
+    run_serve_task,
+    run_training_task,
+)
+
+
+def _print_doctor_report(report: Dict[str, Any]) -> None:
+    """Print a concise human-readable environment diagnostic report."""
+    status = "OK" if report["ok"] else "ISSUES"
+    print(f"\n=== Florence Forge Doctor: {status} ===")
+
+    platform_info = report["platform"]
+    print(
+        "Platform: "
+        f"Python {platform_info['python']} / "
+        f"{platform_info['system']} {platform_info['release']} / "
+        f"{platform_info['machine']}"
+    )
+
+    torch_info = report["torch"]
+    print(
+        "Torch: "
+        f"{torch_info.get('version') or 'missing'} | "
+        f"selected={torch_info['selected_device']} "
+        f"available={torch_info['selected_device_available']}"
+    )
+    print(
+        "Devices: "
+        f"MPS={torch_info['mps_available']} "
+        f"(built={torch_info['mps_built']}), "
+        f"CUDA={torch_info['cuda_available']} "
+        f"(count={torch_info['cuda_device_count']})"
+    )
+
+    model_info = report["model"]
+    if model_info["local_snapshot_exists"]:
+        print(f"Model cache: {model_info['local_snapshot']}")
+    else:
+        print(f"Model cache: missing local snapshot for {model_info['model_id']}")
+
+    missing_required = report.get("missing_required", [])
+    if missing_required:
+        print("Missing required deps: " + ", ".join(missing_required))
+    else:
+        print("Required deps: OK")
+
+    optional_missing = [
+        dep["package"]
+        for dep in report["dependencies"]
+        if not dep["required"] and not dep["available"]
+    ]
+    if optional_missing:
+        print("Missing optional deps: " + ", ".join(optional_missing))
+
+    if report.get("warnings"):
+        print("Warnings:")
+        for warning in report["warnings"]:
+            print(f"  - {warning}")
+
+    print(f"Recommended dtype: {report['recommended_torch_dtype']}")
+    print(f"Smoke command: {report['suggested_smoke_command']}")
+
+
+def run_doctor_task(args) -> bool:
+    """Run lightweight environment diagnostics."""
+    import json
+
+    report = collect_environment_diagnostics(
+        requested_device=getattr(args, "device", "auto"),
+        model_id=getattr(args, "model_id", DEFAULT_MODEL_ID),
+        model_path=getattr(args, "model_path", None),
+        require_model=getattr(args, "require_model", False),
+    )
+
+    if getattr(args, "json", False):
+        print(json.dumps(report, indent=2, ensure_ascii=False))
+    else:
+        _print_doctor_report(report)
+
+    return bool(report["ok"])
+
 
 def setup_cli_logging(verbose: bool = False) -> None:
     """设置CLI日志"""
@@ -129,9 +160,16 @@ def list_available_tasks() -> None:
     """列出所有可用的任务和配置"""
     print("\n=== Florence Forge 可用任务 ===")
     print()
+
+    try:
+        from florence_forge.core.tasks import FLORENCE2_TASKS, TaskCategory
+    except ImportError as e:
+        logger.warning(f"无法导入任务注册表，回退到预定义任务列表: {e}")
+        FLORENCE2_TASKS = {}
+        TaskCategory = []
     
-    if not CORE_AVAILABLE or not FLORENCE2_TASKS:
-        print("\n⚠️  核心模块不可用，显示预定义任务列表:")
+    if not FLORENCE2_TASKS:
+        print("\n⚠️  无可用任务列表:")
         predefined_tasks = {
             'CAPTION': '图像描述生成',
             'DETAILED_CAPTION': '详细图像描述',
@@ -190,6 +228,8 @@ def list_available_tasks() -> None:
 def validate_config(config_path: str) -> bool:
     """验证配置文件"""
     try:
+        from florence_forge.core.config import TrainingConfig
+
         config_path = Path(config_path)
         if not config_path.exists():
             logger.error(f"❌ 配置文件不存在: {config_path}")
@@ -215,28 +255,19 @@ def validate_config(config_path: str) -> bool:
             logger.error(f"❌ 配置文件缺少必需的部分: {missing_sections}")
             return False
         
-        # 如果核心模块可用，进行更详细的验证
-        if CORE_AVAILABLE and TrainingConfig:
-            try:
-                training_config = TrainingConfig.from_dict(config_data)
-                logger.info(f"✅ 配置文件验证通过: {config_path}")
-                logger.info(f"   实验名称: {training_config.experiment_name}")
-                logger.info(f"   模型: {training_config.model_config.model_name}")
-                logger.info(f"   训练轮数: {training_config.num_epochs}")
-                logger.info(f"   批次大小: {training_config.data_config.batch_size}")
-                logger.info(f"   学习率: {training_config.optimization_config.learning_rate}")
-                return True
-            except Exception as e:
-                logger.error(f"❌ 配置验证失败: {e}")
-                return False
-        else:
-            logger.info(f"✅ 配置文件基础验证通过: {config_path}")
-            logger.info(f"   实验名称: {config_data.get('experiment_name', 'N/A')}")
-            logger.info(f"   模型: {config_data.get('model_config', {}).get('model_name', 'N/A')}")
-            logger.info(f"   训练轮数: {config_data.get('num_epochs', 'N/A')}")
-            logger.info(f"   批次大小: {config_data.get('data_config', {}).get('batch_size', 'N/A')}")
-            logger.info(f"   学习率: {config_data.get('optimization_config', {}).get('learning_rate', 'N/A')}")
+        # 进行更详细的验证
+        try:
+            training_config = TrainingConfig.from_dict(config_data)
+            logger.info(f"✅ 配置文件验证通过: {config_path}")
+            logger.info(f"   实验名称: {training_config.experiment_name}")
+            logger.info(f"   模型: {training_config.model_settings.model_name}")
+            logger.info(f"   训练轮数: {training_config.num_epochs}")
+            logger.info(f"   批次大小: {training_config.data_settings.batch_size}")
+            logger.info(f"   学习率: {training_config.optimization_settings.learning_rate}")
             return True
+        except Exception as e:
+            logger.error(f"❌ 配置验证失败: {e}")
+            return False
             
     except yaml.YAMLError as e:
         logger.error(f"❌ YAML格式错误: {e}")
@@ -302,559 +333,6 @@ def generate_config_template(task: str, output_path: str) -> bool:
         logger.error(f"❌ 生成配置模板时出错: {e}")
         return False
 
-def run_inference_task(args) -> bool:
-    """运行推理任务"""
-    try:
-        from pathlib import Path
-        import json
-        import glob
-        from PIL import Image
-        
-        # 导入推理引擎
-        try:
-            from florence_forge.deployment.inference import InferenceEngine
-        except ImportError:
-            logger.error("❌ 无法导入推理引擎，请检查安装")
-            return False
-        
-        # 验证模型路径
-        model_path_str = args.model
-        is_hf_hub_id = '/' in model_path_str and not os.path.exists(model_path_str)
-
-        if not is_hf_hub_id:
-            model_path = Path(model_path_str)
-            if not model_path.exists():
-                logger.error(f"❌ 模型文件或目录不存在: {model_path}")
-                return False
-        else:
-            logger.info(f"ℹ️  将从Hugging Face Hub加载模型: {model_path_str}")
-            model_path = model_path_str
-        
-        logger.info(f"🚀 开始推理任务")
-        logger.info(f"   模型路径: {model_path}")
-        logger.info(f"   输入路径: {args.input}")
-        logger.info(f"   输出目录: {args.output}")
-        logger.info(f"   设备: {args.device}")
-        
-        # 创建推理引擎
-        logger.info("🤖 初始化推理引擎...")
-        inference_engine = InferenceEngine(
-            model=str(model_path),
-            device=args.device,
-            batch_size=args.batch_size,
-            use_amp=args.use_amp
-        )
-        
-        # 创建输出目录
-        output_dir = Path(args.output)
-        output_dir.mkdir(parents=True, exist_ok=True)
-        
-        # 处理输入
-        input_path = Path(args.input)
-        results = []
-        
-        if input_path.is_file():
-            # 单个文件推理
-            if input_path.suffix.lower() in ['.jpg', '.jpeg', '.png', '.bmp', '.tiff']:
-                logger.info("📸 处理单张图像...")
-                image = Image.open(input_path).convert('RGB')
-                # 为Florence2模型添加默认任务提示
-                task_prompt = getattr(args, 'task_prompt', '<OD>')  # 默认为目标检测
-                
-                # 设置可视化参数
-                visualize = getattr(args, 'visualize', False)
-                save_path = None
-                if visualize and getattr(args, 'save_visualizations', False):
-                    save_path = output_dir / f"{input_path.stem}_visualization.png"
-                
-                # 检查是否需要文本输入
-                if task_prompt == '<OPEN_VOCABULARY_DETECTION>' and not args.text_input:
-                    logger.error(f"❌ 任务 '{task_prompt}' 需要 --text-input 参数.")
-                    return False
-                text_input = args.text_input
-
-                result = inference_engine.predict(
-                    image, 
-                    task_prompt=task_prompt,
-                    text_input=text_input,
-                    visualize=visualize,
-                    save_path=str(save_path) if save_path else None
-                )
-                
-                # 保存结果
-                result_file = output_dir / f"{input_path.stem}_result.json"
-                with open(result_file, 'w', encoding='utf-8') as f:
-                    json.dump({
-                        "image_path": str(input_path),
-                        "result": str(result) if not isinstance(result, (dict, list)) else result
-                    }, f, indent=2, ensure_ascii=False)
-                
-                results.append({
-                    "image_path": str(input_path),
-                    "result_file": str(result_file),
-                    "result": result
-                })
-                
-                logger.info(f"✅ 推理完成: {result_file}")
-            else:
-                logger.error(f"❌ 不支持的文件格式: {input_path.suffix}")
-                return False
-                
-        elif input_path.is_dir():
-            # 批量推理
-            image_extensions = ['*.jpg', '*.jpeg', '*.png', '*.bmp', '*.tiff']
-            image_files = []
-            
-            for ext in image_extensions:
-                image_files.extend(glob.glob(str(input_path / ext)))
-                image_files.extend(glob.glob(str(input_path / ext.upper())))
-            
-            if not image_files:
-                logger.error(f"❌ 在目录中未找到图像文件: {input_path}")
-                return False
-            
-            # 为Florence2模型添加默认任务提示
-            task_prompt = getattr(args, 'task_prompt', '<OD>')  # 默认为目标检测
-            
-            # 预先检查是否需要文本输入
-            if task_prompt == '<OPEN_VOCABULARY_DETECTION>' and not args.text_input:
-                logger.error(f"❌ 任务 '{task_prompt}' 需要 --text-input 参数.")
-                return False
-            text_input = args.text_input
-            
-            logger.info(f"📸 处理 {len(image_files)} 张图像...")
-            
-            # 批量处理
-            for i, image_file in enumerate(image_files, 1):
-                try:
-                    image_path = Path(image_file)
-                    logger.info(f"处理 {i}/{len(image_files)}: {image_path.name}")
-                    
-                    image = Image.open(image_path).convert('RGB')
-                    
-                    # 设置可视化参数
-                    visualize = getattr(args, 'visualize', False)
-                    save_path = None
-                    if visualize and getattr(args, 'save_visualizations', False):
-                        save_path = output_dir / f"{image_path.stem}_visualization.png"
-
-                    result = inference_engine.predict(
-                        image, 
-                        task_prompt=task_prompt,
-                        text_input=text_input,
-                        visualize=visualize,
-                        save_path=str(save_path) if save_path else None
-                    )
-                    
-                    # 保存结果
-                    result_file = output_dir / f"{image_path.stem}_result.json"
-                    with open(result_file, 'w', encoding='utf-8') as f:
-                        json.dump({
-                            "image_path": str(image_path),
-                            "result": str(result) if not isinstance(result, (dict, list)) else result
-                        }, f, indent=2, ensure_ascii=False)
-                    
-                    results.append({
-                        "image_path": str(image_path),
-                        "result_file": str(result_file),
-                        "result": result
-                    })
-                    
-                except Exception as e:
-                    logger.error(f"❌ 处理图像失败 {image_path.name}: {e}")
-                    continue
-            
-            logger.info(f"✅ 批量推理完成，处理了 {len(results)} 张图像")
-        else:
-            logger.error(f"❌ 输入路径不存在: {input_path}")
-            return False
-        
-        # 保存汇总结果
-        summary_file = output_dir / "inference_summary.json"
-        with open(summary_file, 'w', encoding='utf-8') as f:
-            json.dump({
-                "model_path": str(model_path),
-                "input_path": str(input_path),
-                "total_images": len(results),
-                "results": results,
-                "stats": inference_engine.get_stats()
-            }, f, indent=2, ensure_ascii=False)
-        
-        # 输出统计信息
-        stats = inference_engine.get_stats()
-        logger.info("📊 推理统计:")
-        logger.info(f"   总推理次数: {stats['total_inferences']}")
-        logger.info(f"   总耗时: {stats['total_time']:.2f}s")
-        logger.info(f"   平均推理时间: {stats['avg_inference_time']:.3f}s")
-        logger.info(f"   吞吐量: {stats['throughput']:.2f} images/s")
-        logger.info(f"   汇总文件: {summary_file}")
-        
-        return True
-        
-    except Exception as e:
-        logger.error(f"❌ 推理任务失败: {e}")
-        import traceback
-        logger.error(f"详细错误信息: {traceback.format_exc()}")
-        return False
-
-def run_data_conversion(args) -> bool:
-    """运行数据转换任务"""
-    try:
-        # 导入数据转换器
-        from florence_forge.data.converter import DataFormatConverter
-        
-        logger.info(f"开始数据转换: {args.convert_type}")
-        
-        if args.convert_type == 'yolo':
-            DataFormatConverter.yolo_to_florence2_od(
-                yolo_labels_dir=args.labels_dir,
-                output_path=args.output,
-                image_dir=args.images_dir,
-                classes_file=args.classes_file,
-                image_ext=args.image_ext,
-                task_type=args.task_type
-            )
-            
-        elif args.convert_type == 'coco':
-            DataFormatConverter.coco_to_florence2_od(
-                coco_json_path=args.json_file,
-                output_path=args.output,
-                image_dir=args.images_dir
-            )
-            
-        elif args.convert_type == 'coco-caption':
-            DataFormatConverter.coco_caption_to_florence2(
-                coco_json_path=args.json_file,
-                output_path=args.output,
-                image_dir=args.images_dir
-            )
-            
-        elif args.convert_type == 'csv':
-            DataFormatConverter.csv_caption_to_florence2(
-                csv_path=args.csv_file,
-                output_path=args.output,
-                image_column=args.image_column,
-                caption_column=args.caption_column,
-                task_type=args.task_type
-            )
-            
-        elif args.convert_type == 'xml':
-            DataFormatConverter.xml_to_florence2_od(
-                xml_dir=args.xml_dir,
-                output_path=args.output,
-                image_dir=args.images_dir
-            )
-            
-        elif args.convert_type == 'ocr':
-            DataFormatConverter.txt_ocr_to_florence2(
-                image_dir=args.images_dir,
-                txt_dir=args.texts_dir,
-                output_path=args.output,
-                task_type=args.task_type
-            )
-            
-        elif args.convert_type == 'ocr-txt':
-            DataFormatConverter.txt_file_ocr_to_florence2(
-                txt_file_path=args.txt_file,
-                image_dir=args.images_dir,
-                output_path=args.output,
-                task_type=args.task_type
-            )
-            
-        else:
-            logger.error(f"❌ 不支持的转换类型: {args.convert_type}")
-            return False
-        
-        logger.info(f"✅ 数据转换完成: {args.output}")
-        return True
-        
-    except ImportError as e:
-        logger.error(f"❌ 导入数据转换器失败: {e}")
-        logger.error("请确保已正确安装florence_forge或数据转换器模块")
-        return False
-        
-    except Exception as e:
-        logger.error(f"❌ 数据转换失败: {e}")
-        return False
-
-def run_training_task(
-    task: Optional[str] = None,
-    config: Optional[str] = None,
-    override: Optional[list] = None,
-    **overrides
-) -> bool:
-    # 处理 --override 参数
-    if override:
-        for key, value in override:
-            # 尝试将值转换为适当的类型
-            try:
-                # 尝试转换为数字
-                if '.' in value:
-                    value = float(value)
-                else:
-                    value = int(value)
-            except ValueError:
-                # 如果转换失败，保持原始字符串
-                pass
-            overrides[key] = value
-    """运行训练任务"""
-    try:
-        # 检查核心模块是否可用
-        if not CORE_AVAILABLE:
-            logger.error("❌ 核心训练模块不可用，请检查安装")
-            return False
-        
-        # 确定配置文件路径
-        if config:
-            config_path = Path(config)
-        elif task:
-            if task not in TASK_CONFIG_MAPPING:
-                logger.error(f"❌ 未知任务类型: {task}")
-                logger.info(f"可用任务: {', '.join(TASK_CONFIG_MAPPING.keys())}")
-                return False
-            config_path = Path(TASK_CONFIG_MAPPING[task])
-        else:
-            logger.error("❌ 必须指定任务类型或配置文件")
-            return False
-        
-        # 查找配置文件
-        possible_paths = [
-            config_path,
-            Path.cwd() / config_path,
-            Path(__file__).parent.parent / config_path
-        ]
-        
-        actual_config_path = None
-        for path in possible_paths:
-            if path.exists():
-                actual_config_path = path
-                break
-        
-        if not actual_config_path:
-            logger.error(f"❌ 找不到配置文件: {config_path}")
-            return False
-        
-        # 将任务类型映射为正确的任务名称
-        task_type_mapping = {
-            'od': 'OD',
-            'detection': 'OD', 
-            'caption': 'CAPTION',
-            'detailed_caption': 'DETAILED_CAPTION',
-            'more_detailed_caption': 'MORE_DETAILED_CAPTION',
-            'open_vocabulary_detection': 'OPEN_VOCABULARY_DETECTION',
-            'phrase_grounding': 'CAPTION_TO_PHRASE_GROUNDING',
-            'dense_region_caption': 'DENSE_REGION_CAPTION',
-            'region_proposal': 'REGION_PROPOSAL',
-            'region_to_category': 'REGION_TO_CATEGORY',
-            'region_to_description': 'REGION_TO_DESCRIPTION',
-            'ocr': 'OCR',
-            'ocr_with_region': 'OCR_WITH_REGION',
-            'segmentation': 'REFERRING_EXPRESSION_SEGMENTATION',
-            'seg': 'REFERRING_EXPRESSION_SEGMENTATION',
-            'region_to_segmentation': 'REGION_TO_SEGMENTATION',
-            'referring_expression_segmentation': 'REFERRING_EXPRESSION_SEGMENTATION'
-        }
-        
-        # 添加任务类型到覆盖参数中
-        if task and task in task_type_mapping:
-            overrides['task_type'] = task_type_mapping[task]
-        
-        logger.info(f"🚀 开始训练任务")
-        logger.info(f"   任务类型: {task or 'custom'}")
-        logger.info(f"   配置文件: {actual_config_path}")
-        
-        if overrides:
-            logger.info(f"   参数覆盖: {overrides}")
-        
-        # 加载训练配置
-        logger.info("📋 加载训练配置...")
-        training_config = load_config_from_file(str(actual_config_path))
-        
-        # 应用命令行参数覆盖
-        if overrides:
-            _apply_config_overrides(training_config, overrides)
-        
-        # 确保训练和验证数据路径被设置
-        if 'train_data' in overrides and overrides['train_data'] is not None:
-            training_config.train_data_path = overrides['train_data']
-            logger.info(f"设置训练数据路径: {training_config.train_data_path}")
-        
-        if 'val_data' in overrides and overrides['val_data'] is not None:
-            training_config.val_data_path = overrides['val_data']
-            logger.info(f"设置验证数据路径: {training_config.val_data_path}")
-        
-        # 验证配置
-        logger.info("✅ 验证训练配置...")
-        if not validate_config(str(actual_config_path)):
-            return False
-        
-        # 初始化模型
-        logger.info("🤖 初始化模型...")
-        model = Florence2MultiTaskModel(training_config.model_config)
-        
-        # 准备数据集
-        logger.info("📊 准备训练数据...")
-        train_dataset, val_dataset = _prepare_datasets(training_config)
-        
-        # 创建训练器
-        logger.info("🏋️ 创建训练器...")
-        trainer = MultiTaskTrainer(
-            model=model,
-            train_dataset=train_dataset,
-            val_dataset=val_dataset,
-            config=training_config
-        )
-        
-        # 开始训练
-        logger.info("🚀 开始训练...")
-        training_summary = trainer.train()
-        
-        # 输出训练结果
-        logger.info("✅ 训练完成!")
-        logger.info(f"   最终损失: {training_summary.get('final_loss', 'N/A')}")
-        logger.info(f"   最佳指标: {training_summary.get('best_metric', 'N/A')}")
-        logger.info(f"   训练轮数: {training_summary.get('epochs_completed', 'N/A')}")
-        logger.info(f"   输出目录: {training_config.output_dir}")
-        
-        return True
-        
-    except Exception as e:
-        logger.error(f"❌ 运行训练任务时出错: {e}")
-        import traceback
-        logger.error(f"详细错误信息: {traceback.format_exc()}")
-        return False
-
-def _set_nested_attr(obj, attr_str, value):
-    """递归设置对象的嵌套属性"""
-    attrs = attr_str.split('.')
-    for attr in attrs[:-1]:
-        obj = getattr(obj, attr)
-    setattr(obj, attrs[-1], value)
-
-def _apply_config_overrides(config: 'TrainingConfig', overrides: Dict[str, Any]) -> None:
-    """应用命令行参数覆盖到配置"""
-    try:
-        if 'epochs' in overrides and overrides['epochs'] is not None:
-            config.num_epochs = overrides['epochs']
-            logger.info(f"覆盖训练轮数: {config.num_epochs}")
-        
-        if 'batch_size' in overrides and overrides['batch_size'] is not None:
-            config.data_config.batch_size = overrides['batch_size']
-            logger.info(f"覆盖批次大小: {config.data_config.batch_size}")
-        
-        if 'lr' in overrides and overrides['lr'] is not None:
-            config.optimization_config.learning_rate = overrides['lr']
-            logger.info(f"覆盖学习率: {config.optimization_config.learning_rate}")
-        
-        if 'output_dir' in overrides and overrides['output_dir'] is not None:
-            config.output_dir = overrides['output_dir']
-            logger.info(f"覆盖输出目录: {config.output_dir}")
-        
-        if 'model' in overrides and overrides['model'] is not None:
-            config.model_config.model_name = overrides['model']
-            logger.info(f"覆盖模型名称: {config.model_config.model_name}")
-        
-        if 'train_data_path' in overrides and overrides['train_data_path'] is not None:
-            config.train_data_path = overrides['train_data_path']
-            logger.info(f"覆盖训练数据路径: {config.train_data_path}")
-        
-        if 'val_data_path' in overrides and overrides['val_data_path'] is not None:
-            config.val_data_path = overrides['val_data_path']
-            logger.info(f"覆盖验证数据路径: {config.val_data_path}")
-        
-        # 添加任务类型覆盖
-        if 'task_type' in overrides and overrides['task_type'] is not None:
-            config.tasks = [overrides['task_type']]
-            config.task_weights = {overrides['task_type']: 1.0}
-            logger.info(f"覆盖任务类型: {config.tasks}")
-        
-        # 处理所有其他以.分隔的覆盖
-        for key, value in overrides.items():
-            if '.' in key and value is not None:
-                try:
-                    _set_nested_attr(config, key, value)
-                    logger.info(f"覆盖配置: {key} = {value}")
-                except AttributeError:
-                    logger.warning(f"无法设置配置属性: {key}")
-            
-    except Exception as e:
-        logger.warning(f"应用配置覆盖时出错: {e}")
-
-def _prepare_datasets(config: 'TrainingConfig') -> Tuple['MultiTaskDataset', Optional['MultiTaskDataset']]:
-    """准备训练和验证数据集"""
-    try:
-        # 构建数据配置列表
-        data_configs = []
-        for task in config.tasks:
-            # 确保任务类型格式正确
-            task_type = task.upper() if task else "CAPTION"
-            if config.train_data_path:
-                data_configs.append({
-                    "task_type": task_type,
-                    "data_path": config.train_data_path,
-                    "weight": config.task_weights.get(task, 1.0)
-                })
-        
-        if not data_configs:
-            # 如果没有配置数据路径，使用默认的示例数据
-            data_configs = [{
-                "task_type": "CAPTION",
-                "data_path": "./data/sample_data.jsonl",
-                "weight": 1.0
-            }]
-            logger.warning("未配置训练数据路径，使用默认示例数据")
-        
-        # 创建processor
-        processor = None
-        if AutoProcessor is not None:
-            try:
-                processor = AutoProcessor.from_pretrained(
-                    config.model_config.model_name,
-                    trust_remote_code=config.model_config.trust_remote_code
-                )
-            except Exception as e:
-                logger.error(f"处理器加载失败: {e}")
-                processor = None
-        else:
-            logger.warning("AutoProcessor不可用，跳过处理器加载")
-        
-        # 创建训练数据集
-        train_dataset = MultiTaskDataset(
-            data_configs=data_configs,
-            image_base_path="./data/images",
-            config=config.data_config,
-            processor=processor
-        )
-        
-        # 创建验证数据集（如果配置了验证数据）
-        val_dataset = None
-        if config.val_data_path:
-            val_data_configs = []
-            for task in config.tasks:
-                # 确保任务类型格式正确
-                task_type = task.upper() if task else "CAPTION"
-                val_data_configs.append({
-                    "task_type": task_type,
-                    "data_path": config.val_data_path,
-                    "weight": config.task_weights.get(task, 1.0)
-                })
-            
-            val_dataset = MultiTaskDataset(
-                data_configs=val_data_configs,
-                image_base_path="./data/images",
-                config=config.data_config,
-                processor=processor
-            )
-        
-        logger.info(f"训练数据集大小: {len(train_dataset)}")
-        if val_dataset:
-            logger.info(f"验证数据集大小: {len(val_dataset)}")
-        
-        return train_dataset, val_dataset
-        
-    except Exception as e:
-        logger.error(f"准备数据集时出错: {e}")
-        raise
 
 def create_parser() -> argparse.ArgumentParser:
     """创建命令行参数解析器"""
@@ -875,6 +353,7 @@ def create_parser() -> argparse.ArgumentParser:
   florence_forge_cli infer --model ./models/best.pth --input ./test_images/ --output ./results --device cuda --use-amp
   
   # 配置管理
+  florence_forge_cli doctor --device mps --require-model
   florence_forge_cli list-tasks
   florence_forge_cli validate --config configs/examples/caption_training.yaml
   florence_forge_cli generate-config --task ocr --output my_config.yaml
@@ -885,8 +364,16 @@ def create_parser() -> argparse.ArgumentParser:
   florence_forge_cli convert csv --csv-file ./captions.csv --output ./data.jsonl
   florence_forge_cli convert xml --xml-dir ./annotations --images-dir ./images --output ./data.jsonl
   florence_forge_cli convert ocr --images-dir ./images --texts-dir ./texts --output ./data.jsonl
+  
+  # 推理服务
+  florence_forge_cli serve --model ./models/best.pth --port 8000
+  florence_forge_cli serve --model ./models/best.pth --host 0.0.0.0 --port 8080 --device cuda
+  
+  # 模型评估
+  florence_forge_cli eval --model ./models/best.pth --data ./eval_data.jsonl
+  florence_forge_cli eval --model ./models/best.pth --data ./eval_data.jsonl --output results.json
 
-更多信息请访问: https://github.com/florenceforge/florenceforge
+更多信息请访问: https://github.com/florenceforge/florence-forge
         """
     )
     
@@ -897,6 +384,34 @@ def create_parser() -> argparse.ArgumentParser:
     )
     
     subparsers = parser.add_subparsers(dest='command', help='可用命令')
+
+    # 环境诊断命令
+    doctor_parser = subparsers.add_parser('doctor', help='检查本地运行环境')
+    doctor_parser.add_argument(
+        '--device', '-d',
+        choices=['auto', 'cpu', 'cuda', 'cuda:0', 'cuda:1', 'cuda:2', 'cuda:3', 'mps'],
+        default='auto',
+        help='要检查的目标设备 (默认: auto)'
+    )
+    doctor_parser.add_argument(
+        '--model-id',
+        default=DEFAULT_MODEL_ID,
+        help=f'要检查的Hugging Face模型ID (默认: {DEFAULT_MODEL_ID})'
+    )
+    doctor_parser.add_argument(
+        '--model-path',
+        help='显式检查的本地模型目录或文件'
+    )
+    doctor_parser.add_argument(
+        '--require-model',
+        action='store_true',
+        help='本地模型快照不存在时返回失败'
+    )
+    doctor_parser.add_argument(
+        '--json',
+        action='store_true',
+        help='以JSON格式输出诊断报告'
+    )
     
     # 训练命令
     train_parser = subparsers.add_parser('train', help='运行训练任务')
@@ -952,6 +467,10 @@ def create_parser() -> argparse.ArgumentParser:
         choices=['auto', 'cpu', 'cuda', 'cuda:0', 'cuda:1', 'cuda:2', 'cuda:3', 'mps'],
         default='auto',
         help='训练设备 (默认: auto)'
+    )
+    train_parser.add_argument(
+        '--resume', '-r',
+        help='从检查点恢复训练 (检查点目录路径)'
     )
     
     # 列出任务命令
@@ -1107,6 +626,71 @@ def create_parser() -> argparse.ArgumentParser:
         help='任务类型'
     )
     
+    # 推理服务器命令
+    serve_parser = subparsers.add_parser('serve', help='启动模型推理服务')
+    serve_parser.add_argument(
+        '--model', '-m',
+        required=True,
+        help='训练好的模型文件路径'
+    )
+    serve_parser.add_argument(
+        '--host',
+        default='0.0.0.0',
+        help='服务器监听地址 (默认: 0.0.0.0)'
+    )
+    serve_parser.add_argument(
+        '--port', '-p',
+        type=int,
+        default=8000,
+        help='服务器监听端口 (默认: 8000)'
+    )
+    serve_parser.add_argument(
+        '--device', '-d',
+        choices=['auto', 'cpu', 'cuda', 'cuda:0', 'cuda:1', 'cuda:2', 'cuda:3', 'mps'],
+        default='auto',
+        help='推理设备 (默认: auto)'
+    )
+    serve_parser.add_argument(
+        '--backend',
+        choices=['native', 'vllm'],
+        default='native',
+        help='推理后端 (默认: native)'
+    )
+    serve_parser.add_argument(
+        '--batch-size', '-b',
+        type=int,
+        default=1,
+        help='批处理大小 (默认: 1)'
+    )
+    serve_parser.add_argument(
+        '--use-amp',
+        action='store_true',
+        help='使用自动混合精度加速推理'
+    )
+    
+    # 评估命令
+    eval_parser = subparsers.add_parser('eval', help='运行模型评估')
+    eval_parser.add_argument(
+        '--model', '-m',
+        required=True,
+        help='训练好的模型文件路径'
+    )
+    eval_parser.add_argument(
+        '--data', '-d',
+        required=True,
+        help='评估数据文件路径'
+    )
+    eval_parser.add_argument(
+        '--output', '-o',
+        help='评估结果输出路径 (JSON格式)'
+    )
+    eval_parser.add_argument(
+        '--device',
+        choices=['auto', 'cpu', 'cuda', 'cuda:0', 'cuda:1', 'cuda:2', 'cuda:3', 'mps'],
+        default='auto',
+        help='评估设备 (默认: auto)'
+    )
+    
     return parser
 
 def main() -> None:
@@ -1125,7 +709,11 @@ def main() -> None:
     setup_cli_logging(args.verbose)
     
     # 执行命令
-    if args.command == 'train':
+    if args.command == 'doctor':
+        success = run_doctor_task(args)
+        sys.exit(0 if success else 1)
+
+    elif args.command == 'train':
         # 构建参数覆盖字典
         overrides = {}
         if args.epochs:
@@ -1144,6 +732,8 @@ def main() -> None:
             overrides['val_data'] = args.val_data
         if args.device:
             overrides['device'] = args.device
+        if hasattr(args, 'resume') and args.resume:
+            overrides['resume'] = args.resume
         
         success = run_training_task(
             task=args.task,
@@ -1172,6 +762,14 @@ def main() -> None:
         success = run_data_conversion(args)
         sys.exit(0 if success else 1)
         
+    elif args.command == 'serve':
+        success = run_serve_task(args)
+        sys.exit(0 if success else 1)
+        
+    elif args.command == 'eval':
+        success = run_eval_task(args)
+        sys.exit(0 if success else 1)
+        
     else:
         parser.print_help()
         sys.exit(1)
@@ -1184,15 +782,15 @@ def train_command():
 
 def eval_command():
     """评估命令入口点"""
-    print("评估功能正在开发中...")
-    sys.exit(1)
+    sys.argv = ['florence_forge_cli', 'eval'] + sys.argv[1:]
+    main()
 
 def info_command():
     """信息命令入口点"""
     print("\n=== Florence Forge 信息 ===")
     print("版本: 1.0.0")
     print("描述: Florence-2多任务微调库")
-    print("GitHub: https://github.com/florenceforge/florenceforge")
+    print("GitHub: https://github.com/florenceforge/florence-forge")
     print("文档: https://florenceforge.readthedocs.io")
     print("\n使用 'florence_forge_cli --help' 查看完整帮助")
 

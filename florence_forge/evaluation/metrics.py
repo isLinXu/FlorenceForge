@@ -6,20 +6,41 @@
 import re
 import json
 import logging
+from typing import Dict, List, Any, Optional, Tuple
+from collections import defaultdict
+import numpy as np
+
+from ..utils.optional_dependencies import missing_dependency_message
 
 
 try:
+    from pycocotools.coco import COCO
+    from pycocotools.cocoeval import COCOeval
     COCO_AVAILABLE = True
 except ImportError:
     COCO_AVAILABLE = False
-    logging.warning("pycocotools未安装，部分检测指标将不可用")
+    logging.warning(
+        missing_dependency_message("部分检测指标", "pycocotools", "evaluation")
+    )
 
 try:
     import cv2
     CV2_AVAILABLE = True
 except ImportError:
     CV2_AVAILABLE = False
-    logging.warning("opencv-python未安装，部分分割指标将不可用")
+    logging.warning(
+        missing_dependency_message("部分分割指标", "opencv-python")
+    )
+
+try:
+    from rouge_score import rouge_scorer
+    ROUGE_AVAILABLE = True
+except ImportError:
+    ROUGE_AVAILABLE = False
+    rouge_scorer = None
+    logging.warning(
+        missing_dependency_message("ROUGE指标", "rouge-score", "evaluation")
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -131,20 +152,28 @@ class CaptionMetrics(MetricCalculator):
         try:
             from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
             from nltk.tokenize import word_tokenize
-            import nltk
-            
-            # 下载必要的NLTK数据
-            try:
-                nltk.data.find('tokenizers/punkt')
-            except LookupError:
-                nltk.download('punkt')
+
+            warned_tokenizer_fallback = False
+
+            def tokenize(text: str) -> List[str]:
+                nonlocal warned_tokenizer_fallback
+                try:
+                    return word_tokenize(text.lower())
+                except LookupError:
+                    if not warned_tokenizer_fallback:
+                        logger.warning(
+                            "NLTK punkt 数据未安装，BLEU 计算降级为正则分词；"
+                            "如需标准分词，请安装 evaluation 额外依赖并预先下载 punkt。"
+                        )
+                        warned_tokenizer_fallback = True
+                    return re.findall(r"\w+|[^\w\s]", text.lower(), flags=re.UNICODE)
             
             smoothing = SmoothingFunction().method1
             bleu_scores = []
             
             for pred, ref in zip(self.predictions, self.references):
-                pred_tokens = word_tokenize(pred.lower())
-                ref_tokens = [word_tokenize(ref.lower())]
+                pred_tokens = tokenize(pred)
+                ref_tokens = [tokenize(ref)]
                 
                 score = sentence_bleu(ref_tokens, pred_tokens, smoothing_function=smoothing)
                 bleu_scores.append(score)
@@ -155,30 +184,34 @@ class CaptionMetrics(MetricCalculator):
             }
         
         except ImportError:
-            logger.warning("NLTK未安装，跳过BLEU计算")
+            logger.warning(
+                missing_dependency_message("BLEU计算", "nltk", "evaluation")
+            )
             return {}
     
     def _compute_rouge(self) -> Dict[str, float]:
         """计算ROUGE分数"""
+        if not ROUGE_AVAILABLE:
+            return {}
+
         try:
-            
             scorer = rouge_scorer.RougeScorer(['rouge1', 'rouge2', 'rougeL'], use_stemmer=True)
             rouge_scores = defaultdict(list)
-            
+
             for pred, ref in zip(self.predictions, self.references):
                 scores = scorer.score(ref, pred)
                 for key, score in scores.items():
                     rouge_scores[f'{key}_f1'].append(score.fmeasure)
                     rouge_scores[f'{key}_precision'].append(score.precision)
                     rouge_scores[f'{key}_recall'].append(score.recall)
-            
+
             return {
                 key: np.mean(values)
                 for key, values in rouge_scores.items()
             }
-        
-        except ImportError:
-            logger.warning("rouge-score未安装，跳过ROUGE计算")
+
+        except Exception as e:
+            logger.warning(f"ROUGE计算失败: {e}")
             return {}
     
     def _compute_word_overlap(self) -> float:
@@ -238,13 +271,12 @@ class DetectionMetrics(MetricCalculator):
         # 计算基本指标
         metrics.update(self._compute_basic_metrics(parsed_predictions, parsed_references))
         
-        # 计算mAP（如果可用）
-        if COCO_AVAILABLE:
-            try:
-                map_score = self._compute_map(parsed_predictions, parsed_references)
-                metrics['mAP'] = map_score
-            except Exception as e:
-                logger.warning(f"mAP计算失败: {e}")
+        # 计算 mAP。_compute_map 使用 torchvision 实现轻量 AP，不应依赖 pycocotools。
+        try:
+            map_score = self._compute_map(parsed_predictions, parsed_references)
+            metrics['mAP'] = map_score
+        except Exception as e:
+            logger.warning(f"mAP计算失败: {e}")
         
         return metrics
     
@@ -389,10 +421,108 @@ class DetectionMetrics(MetricCalculator):
         return inter_area / union_area if union_area > 0 else 0.0
     
     def _compute_map(self, predictions: List[List[Dict]], references: List[List[Dict]]) -> float:
-        """计算mAP（需要pycocotools）"""
-        # 这里简化实现，实际应用中需要更复杂的mAP计算
-        # 可以参考COCO评估标准
-        return 0.0
+        """计算 mAP (Mean Average Precision)
+
+        使用 torchvision 的 box_iou 实现简单的 per-class AP 计算。
+        当 pycocotools 不可用时作为轻量替代。
+        """
+        import torch
+        from collections import defaultdict
+
+        if not predictions or not references:
+            return 0.0
+
+        try:
+            from torchvision.ops import box_iou
+        except ImportError:
+            logger.warning(
+                missing_dependency_message("mAP计算", "torchvision")
+            )
+            return 0.0
+
+        # 收集所有预测和真实框，按类别和图片分组，避免跨图片错误匹配。
+        iou_threshold = 0.5
+        all_aps = []
+
+        pred_by_class: Dict[str, List[Tuple[int, torch.Tensor, float]]] = defaultdict(list)
+        gt_by_class: Dict[str, Dict[int, List[torch.Tensor]]] = defaultdict(lambda: defaultdict(list))
+
+        for image_idx, (pred_boxes, ref_boxes) in enumerate(zip(predictions, references)):
+            for pred in pred_boxes:
+                cat = pred.get('category') or pred.get('label') or 'default'
+                bbox = pred.get('bbox', [0, 0, 0, 0])
+                score = float(pred.get('score', pred.get('confidence', 1.0)))
+                pred_by_class[cat].append(
+                    (image_idx, torch.tensor(bbox, dtype=torch.float32).unsqueeze(0), score)
+                )
+
+            for ref in ref_boxes:
+                cat = ref.get('category') or ref.get('label') or 'default'
+                bbox = ref.get('bbox', [0, 0, 0, 0])
+                gt_by_class[cat][image_idx].append(torch.tensor(bbox, dtype=torch.float32).unsqueeze(0))
+
+        # 如果没有检测到任何类别，使用默认类别
+        all_categories = set(pred_by_class.keys()) | set(gt_by_class.keys())
+        if not all_categories:
+            all_categories = {'default'}
+            if not pred_by_class:
+                pred_by_class['default'] = []
+            if not gt_by_class:
+                gt_by_class['default'] = {}
+
+        for cat in all_categories:
+            preds = pred_by_class.get(cat, [])
+            gts = gt_by_class.get(cat, {})
+            total_gts = sum(len(image_gts) for image_gts in gts.values())
+
+            if total_gts == 0:
+                continue
+            if not preds:
+                all_aps.append(0.0)
+                continue
+
+            # 按分数降序排列
+            preds.sort(key=lambda x: x[2], reverse=True)
+
+            # 简单 AP 计算：对每个预测找最佳匹配
+            tp = torch.zeros(len(preds))
+            fp = torch.zeros(len(preds))
+            matched_gt_by_image: Dict[int, set[int]] = defaultdict(set)
+
+            for i, (image_idx, pred_box, _score) in enumerate(preds):
+                image_gt_list = gts.get(image_idx, [])
+                if not image_gt_list:
+                    fp[i] = 1
+                    continue
+
+                image_gt_boxes = torch.cat(image_gt_list)
+                ious = box_iou(pred_box, image_gt_boxes).squeeze(0)
+                if ious.numel() == 0:
+                    fp[i] = 1
+                    continue
+
+                best_iou, best_j = ious.max(dim=0)
+                best_j_int = int(best_j.item())
+                if best_iou >= iou_threshold and best_j_int not in matched_gt_by_image[image_idx]:
+                    tp[i] = 1
+                    matched_gt_by_image[image_idx].add(best_j_int)
+                else:
+                    fp[i] = 1
+
+            # 累积 precision/recall
+            tp_cumsum = tp.cumsum(dim=0)
+            fp_cumsum = fp.cumsum(dim=0)
+            recalls = tp_cumsum / total_gts
+            precisions = tp_cumsum / (tp_cumsum + fp_cumsum + 1e-8)
+
+            # 11-point interpolated AP
+            ap = 0.0
+            for t in torch.linspace(0, 1, 11):
+                if (recalls >= t).any():
+                    ap += precisions[recalls >= t].max().item()
+            all_aps.append(ap / 11.0)
+
+        return float(np.mean(all_aps)) if all_aps else 0.0
 
 class OCRMetrics(MetricCalculator):
     """OCR任务指标"""
@@ -639,14 +769,36 @@ def get_metric_calculator(task_type: str) -> MetricCalculator:
         指标计算器实例
     """
     task_type_lower = task_type.lower()
-    
+
+    detection_aliases = {
+        "od",
+        "open_vocabulary_detection",
+        "region_proposal",
+        "phrase_grounding",
+        "caption_to_phrase_grounding",
+    }
+    segmentation_aliases = {
+        "region_to_segmentation",
+        "referring_expression_segmentation",
+        "seg",
+        "segmentation",
+    }
+
     if 'caption' in task_type_lower or 'description' in task_type_lower:
         return CaptionMetrics()
-    elif 'detection' in task_type_lower or 'object' in task_type_lower:
+    elif (
+        'detection' in task_type_lower
+        or 'object' in task_type_lower
+        or task_type_lower in detection_aliases
+    ):
         return DetectionMetrics()
     elif 'ocr' in task_type_lower or 'text' in task_type_lower:
         return OCRMetrics()
-    elif 'segmentation' in task_type_lower or 'segment' in task_type_lower:
+    elif (
+        'segmentation' in task_type_lower
+        or 'segment' in task_type_lower
+        or task_type_lower in segmentation_aliases
+    ):
         return SegmentationMetrics()
     else:
         # 默认使用基础指标计算器

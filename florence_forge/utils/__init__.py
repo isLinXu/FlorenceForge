@@ -1,122 +1,109 @@
-"""FlorenceForge工具模块
+"""FlorenceForge 工具模块导出入口。"""
 
-提供各种辅助功能和工具
-"""
-
-from .io import (
-    save_json,
-    load_json,
-    save_pickle,
-    load_pickle,
-    ensure_dir,
-    copy_file
-)
-from .image import (
-    load_image,
-    resize_image,
-    normalize_image,
-    save_image,
-    ImageProcessor
-)
-from .text import (
-    clean_text,
-    tokenize_text,
-    extract_coordinates,
-    format_detection_result,
-    TextProcessor
-)
-from .visualization import (
-    plot_training_curves,
-    plot_task_distribution,
-    visualize_detection_results,
-    create_evaluation_dashboard,
-    VisualizationManager
-)
-from .memory import (
-    get_memory_usage,
-    clear_cache,
-    optimize_memory
-)
-from .device import (
-    get_device_info,
-    set_device,
-    move_to_device,
-    DeviceManager
-)
-from .tools import (
-    Timer,
-    timing_decorator,
-    FileHasher,
-    ConfigManager,
-    ProgressTracker,
-    suppress_warnings,
-    retry_on_failure,
-    ensure_list,
-    flatten_dict,
-    unflatten_dict
-)
+from importlib import import_module
 
 __all__ = [
-    # Logging
-    'setup_logging',
-    'get_logger',
-    
-    # IO
-    'save_json',
-    'load_json',
-    'save_pickle',
-    'load_pickle',
-    'ensure_dir',
-    'copy_file',
-    
-    # Image
-    'load_image',
-    'resize_image',
-    'normalize_image',
-    'save_image',
-    'ImageProcessor',
-    
-    # Text
-    'clean_text',
-    'tokenize_text',
-    'extract_coordinates',
-    'format_detection_result',
-    'TextProcessor',
-    
-    # Visualization
-    'plot_training_curves',
-    'plot_task_distribution',
-    'visualize_detection_results',
-    'create_evaluation_dashboard',
-    'VisualizationManager',
-    
-    # Memory
-    'get_memory_usage',
-    'clear_cache',
-    'optimize_memory',
-    
-    # Device
-    'get_device_info',
-    'set_device',
-    'move_to_device',
-    'DeviceManager',
-    
-    # Tools
-    'Timer',
-    'timing_decorator',
-    'FileHasher',
-    'ConfigManager',
-    'ProgressTracker',
-    'suppress_warnings',
-    'retry_on_failure',
-    'ensure_list',
-    'flatten_dict',
-    'unflatten_dict',
-    
-    # Optimization
-    'ModelOptimizer',
-    'MemoryOptimizer',
-    'create_model_optimizer',
-    'quick_quantize',
-    'quick_prune'
+    "setup_logging",
+    "get_logger",
+    "save_json",
+    "load_json",
+    "save_pickle",
+    "load_pickle",
+    "ensure_dir",
+    "copy_file",
+    "load_image",
+    "resize_image",
+    "normalize_image",
+    "save_image",
+    "ImageProcessor",
+    "clean_text",
+    "tokenize_text",
+    "extract_coordinates",
+    "format_detection_result",
+    "TextProcessor",
+    "plot_training_curves",
+    "plot_task_distribution",
+    "visualize_detection_results",
+    "create_evaluation_dashboard",
+    "VisualizationManager",
+    "get_memory_usage",
+    "clear_cache",
+    "optimize_memory",
+    "get_device_info",
+    "set_device",
+    "move_to_device",
+    "DeviceManager",
+    "Timer",
+    "timing_decorator",
+    "FileHasher",
+    "ConfigManager",
+    "ProgressTracker",
+    "suppress_warnings",
+    "retry_on_failure",
+    "ensure_list",
+    "flatten_dict",
+    "unflatten_dict",
+    "ModelOptimizer",
+    "MemoryOptimizer",
+    "create_model_optimizer",
+    "quick_quantize",
+    "quick_prune",
 ]
+
+_LAZY_EXPORTS = {
+    "setup_logging": ("florence_forge.utils.logging", "setup_logging"),
+    "get_logger": ("florence_forge.utils.logging", "get_logger"),
+    "save_json": ("florence_forge.utils.io", "save_json"),
+    "load_json": ("florence_forge.utils.io", "load_json"),
+    "save_pickle": ("florence_forge.utils.io", "save_pickle"),
+    "load_pickle": ("florence_forge.utils.io", "load_pickle"),
+    "ensure_dir": ("florence_forge.utils.io", "ensure_dir"),
+    "copy_file": ("florence_forge.utils.io", "copy_file"),
+    "load_image": ("florence_forge.utils.image", "load_image"),
+    "resize_image": ("florence_forge.utils.image", "resize_image"),
+    "normalize_image": ("florence_forge.utils.image", "normalize_image"),
+    "save_image": ("florence_forge.utils.image", "save_image"),
+    "ImageProcessor": ("florence_forge.utils.image", "ImageProcessor"),
+    "clean_text": ("florence_forge.utils.text", "clean_text"),
+    "tokenize_text": ("florence_forge.utils.text", "tokenize_text"),
+    "extract_coordinates": ("florence_forge.utils.text", "extract_coordinates"),
+    "format_detection_result": ("florence_forge.utils.text", "format_detection_result"),
+    "TextProcessor": ("florence_forge.utils.text", "TextProcessor"),
+    "plot_training_curves": ("florence_forge.utils.visualization", "plot_training_curves"),
+    "plot_task_distribution": ("florence_forge.utils.visualization", "plot_task_distribution"),
+    "visualize_detection_results": ("florence_forge.utils.visualization", "visualize_detection_results"),
+    "create_evaluation_dashboard": ("florence_forge.utils.visualization", "create_evaluation_dashboard"),
+    "VisualizationManager": ("florence_forge.utils.visualization", "VisualizationManager"),
+    "get_memory_usage": ("florence_forge.utils.memory", "get_memory_usage"),
+    "clear_cache": ("florence_forge.utils.memory", "clear_cache"),
+    "optimize_memory": ("florence_forge.utils.memory", "optimize_memory"),
+    "get_device_info": ("florence_forge.utils.device", "get_device_info"),
+    "set_device": ("florence_forge.utils.device", "set_device"),
+    "move_to_device": ("florence_forge.utils.device", "move_to_device"),
+    "DeviceManager": ("florence_forge.utils.device", "DeviceManager"),
+    "Timer": ("florence_forge.utils.tools", "Timer"),
+    "timing_decorator": ("florence_forge.utils.tools", "timing_decorator"),
+    "FileHasher": ("florence_forge.utils.tools", "FileHasher"),
+    "ConfigManager": ("florence_forge.utils.tools", "ConfigManager"),
+    "ProgressTracker": ("florence_forge.utils.tools", "ProgressTracker"),
+    "suppress_warnings": ("florence_forge.utils.tools", "suppress_warnings"),
+    "retry_on_failure": ("florence_forge.utils.tools", "retry_on_failure"),
+    "ensure_list": ("florence_forge.utils.tools", "ensure_list"),
+    "flatten_dict": ("florence_forge.utils.tools", "flatten_dict"),
+    "unflatten_dict": ("florence_forge.utils.tools", "unflatten_dict"),
+    "ModelOptimizer": ("florence_forge.utils.optimization", "ModelOptimizer"),
+    "MemoryOptimizer": ("florence_forge.utils.optimization", "MemoryOptimizer"),
+    "create_model_optimizer": ("florence_forge.utils.optimization", "create_model_optimizer"),
+    "quick_quantize": ("florence_forge.utils.optimization", "quick_quantize"),
+    "quick_prune": ("florence_forge.utils.optimization", "quick_prune"),
+}
+
+
+def __getattr__(name):
+    if name in _LAZY_EXPORTS:
+        module_name, attr_name = _LAZY_EXPORTS[name]
+        module = import_module(module_name)
+        value = getattr(module, attr_name)
+        globals()[name] = value
+        return value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

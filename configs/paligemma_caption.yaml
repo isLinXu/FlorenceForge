@@ -1,0 +1,75 @@
+# PaliGemma Caption 训练配置示例
+# 参考: roboflow/maestro 统一接口设计
+
+# 模型配置
+model:
+  model_name: "google/paligemma-3b-pt-224"
+  backend_name: "paligemma"
+  trust_remote_code: true
+  use_lora: true
+  lora_config:
+    r: 16
+    lora_alpha: 32
+    target_modules:
+      - "q_proj"
+      - "v_proj"
+      - "k_proj"
+      - "o_proj"
+    lora_dropout: 0.05
+    bias: "none"
+    task_type: "CAUSAL_LM"
+
+# 数据配置
+data:
+  batch_size: 4
+  num_workers: 2
+  pin_memory: true
+  shuffle: true
+  drop_last: true
+  use_augmentation: false
+  use_balanced_sampling: true
+  use_cache: true
+  cache_dir: "./cache/paligemma"
+
+# 优化配置
+optimization:
+  learning_rate: 1.0e-4
+  weight_decay: 0.01
+  adam_beta1: 0.9
+  adam_beta2: 0.999
+  adam_epsilon: 1.0e-8
+  max_grad_norm: 1.0
+  lr_scheduler_type: "cosine"
+  warmup_ratio: 0.1
+
+# 训练配置
+training:
+  num_epochs: 10
+  max_steps: null
+  gradient_accumulation_steps: 1
+  logging_steps: 10
+  save_steps: 500
+  eval_steps: 500
+  output_dir: "./output/paligemma_caption"
+  logging_dir: "./logs/paligemma_caption"
+  save_total_limit: 3
+  greater_is_better: false
+  metric_for_best_model: "eval_loss"
+  early_stopping_patience: 5
+  device: "auto"
+  use_fp16: false
+  use_bf16: true
+
+# 任务调度配置
+task_scheduling:
+  strategy: "round_robin"
+  initial_weights: null
+  temperature: 1.0
+
+# 监控配置
+monitoring:
+  use_wandb: false
+  use_tensorboard: true
+  use_swanlab: false
+  log_gradients: false
+  log_parameters: false

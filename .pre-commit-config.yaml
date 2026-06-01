@@ -1,0 +1,79 @@
+# FlorenceForge pre-commit 钩子
+# 安装:    pre-commit install
+# 全量跑:  pre-commit run --all-files
+#
+# 注意：仅 lint florence_forge/ 包，tests/ 与 scripts/ 用更宽松的规则。
+
+repos:
+  # ---------------------------------------------------------------------------
+  # 基础卫生
+  # ---------------------------------------------------------------------------
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: ^(temp/|scripts/infer/|.*\.md$)
+      - id: end-of-file-fixer
+        exclude: ^(temp/|scripts/infer/|.*\.md$)
+      - id: check-yaml
+        args: [--unsafe]  # 允许自定义 YAML tag（如 !path）
+      - id: check-json
+      - id: check-toml
+      - id: check-added-large-files
+        args: [--maxkb=2048]   # 单文件上限 2MB，避免误传图片/模型
+      - id: check-merge-conflict
+      - id: check-case-conflict
+      - id: mixed-line-ending
+        args: [--fix=lf]
+      - id: debug-statements   # 拦截 forgotten breakpoint()
+        exclude: ^scripts/
+
+  # ---------------------------------------------------------------------------
+  # 代码格式 —— black
+  # ---------------------------------------------------------------------------
+  - repo: https://github.com/psf/black
+    rev: 23.12.1
+    hooks:
+      - id: black
+        args: [--config=pyproject.toml]
+        files: ^florence_forge/.*\.py$
+
+  # ---------------------------------------------------------------------------
+  # 导入排序 —— isort
+  # ---------------------------------------------------------------------------
+  - repo: https://github.com/pycqa/isort
+    rev: 5.13.2
+    hooks:
+      - id: isort
+        args: [--settings-path=pyproject.toml]
+        files: ^florence_forge/.*\.py$
+
+  # ---------------------------------------------------------------------------
+  # 高速 Lint —— ruff（取代 flake8 大部分检查）
+  # ---------------------------------------------------------------------------
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.4.10
+    hooks:
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix]
+        files: ^florence_forge/.*\.py$
+      # 可选：启用 ruff 格式化代替 black（先关闭，避免与 black 冲突）
+      # - id: ruff-format
+
+  # ---------------------------------------------------------------------------
+  # 类型检查 —— mypy（仅在显式开启时跑，避免 pre-commit 太慢）
+  # ---------------------------------------------------------------------------
+  # 默认不在每次 commit 跑 mypy，仅在 CI 跑；如需本地启用，取消下方注释：
+  # - repo: https://github.com/pre-commit/mirrors-mypy
+  #   rev: v1.10.0
+  #   hooks:
+  #     - id: mypy
+  #       args: [--config-file=pyproject.toml]
+  #       additional_dependencies:
+  #         - types-PyYAML
+  #         - pydantic>=2.4
+
+ci:
+  autofix_commit_msg: "style: auto-fix from pre-commit hooks"
+  autoupdate_schedule: monthly
+  skip: []

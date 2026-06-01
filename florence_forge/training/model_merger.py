@@ -14,6 +14,7 @@ from peft import PeftModel, get_peft_model_state_dict
 from transformers import AutoTokenizer, AutoProcessor
 
 from ..core.model import Florence2MultiTaskModel
+from ..core.config import ModelConfig
 from .lora_manager import LoRAManager
 
 logger = logging.getLogger(__name__)
@@ -44,79 +45,98 @@ class ModelMerger:
         """合并LoRA权重到基础模型
         
         Args:
-            base_model: 基础模型
-            lora_model: LoRA模型
-            task_name: 任务名称
-            merge_strategy: 合并策略 ('linear', 'weighted')
+            base_model: 基础模型（未使用，保留参数以兼容旧接口）
+            lora_model: LoRA模型（PeftModel）
+            task_name: 任务名称（用于日志）
+            merge_strategy: 合并策略（单适配器场景由 peft 内置处理）
             
         Returns:
             合并后的模型
+            
+        Note:
+            单适配器合并直接使用 peft 内置的 merge_and_unload()，
+            它会正确计算 delta = lora_B @ lora_A * (alpha / r) 并合并到 base weight。
+            旧的手动合并逻辑（_linear_merge/_weighted_merge）键名不匹配，
+            会导致静默失败（不报错但不合并权重）。
         """
         logger.info(f"开始合并LoRA权重，任务: {task_name}, 策略: {merge_strategy}")
-        
-        try:
-            # 获取LoRA权重
-            lora_state_dict = get_peft_model_state_dict(lora_model)
-            
-            # 创建合并后的模型
-            merged_model = self._create_merged_model(
-                base_model, lora_state_dict, merge_strategy
-            )
-            
-            logger.info("LoRA权重合并完成")
-            return merged_model
-            
-        except Exception as e:
-            logger.error(f"LoRA权重合并失败: {e}")
-            raise
+        # 直接使用 peft 内置的正确合并逻辑
+        return self.merge_and_unload(lora_model)
     
     def merge_and_unload(
         self,
         peft_model: PeftModel,
-        output_dir: Union[str, Path],
+        output_dir: Optional[Union[str, Path]] = None,
         save_tokenizer: bool = True,
         save_processor: bool = True
-    ) -> None:
+    ) -> Florence2MultiTaskModel:
         """合并LoRA权重并卸载PEFT包装器
         
         Args:
             peft_model: PEFT模型
-            output_dir: 输出目录
+            output_dir: 输出目录（可选）
             save_tokenizer: 是否保存tokenizer
             save_processor: 是否保存processor
+            
+        Returns:
+            合并后的Florence2MultiTaskModel
         """
-        output_path = Path(output_dir)
-        output_path.mkdir(parents=True, exist_ok=True)
+        logger.info("开始合并LoRA权重并卸载PEFT包装器...")
         
         try:
-            # 合并并卸载LoRA权重
-            merged_model = peft_model.merge_and_unload()
+            # 合并并卸载PEFT模型
+            merged_hf_model = peft_model.merge_and_unload()
             
-            # 保存合并后的模型
-            merged_model.save_pretrained(output_path)
+            # 创建新的模型配置
+            merged_config = ModelConfig(
+                model_name=getattr(peft_model.base_model.config, 'name_or_path', 'merged_model'),
+                use_lora=False,  # 合并后的模型不需要LoRA
+                trust_remote_code=True
+            )
             
-            # 保存tokenizer和processor
-            if save_tokenizer and hasattr(peft_model, 'tokenizer'):
-                peft_model.tokenizer.save_pretrained(output_path)
+            # 创建Florence2MultiTaskModel实例
+            florence_model = Florence2MultiTaskModel.__new__(Florence2MultiTaskModel)
+            florence_model.config = merged_config
+            florence_model.model = merged_hf_model
+            florence_model.is_peft_model = False
             
-            if save_processor and hasattr(peft_model, 'processor'):
-                peft_model.processor.save_pretrained(output_path)
+            # 尝试加载processor
+            try:
+                florence_model.processor = AutoProcessor.from_pretrained(
+                    merged_config.model_name,
+                    trust_remote_code=True
+                )
+            except Exception as e:
+                logger.warning(f"Processor加载失败: {e}")
+                florence_model.processor = None
             
-            # 保存合并信息
-            merge_info = {
-                'merge_timestamp': torch.utils.data.get_worker_info(),
-                'base_model_name': getattr(merged_model.config, 'name_or_path', 'unknown'),
-                'lora_merged': True,
-                'merge_strategy': 'peft_merge_and_unload'
-            }
+            # 如果指定了输出目录，保存模型
+            if output_dir is not None:
+                output_path = Path(output_dir)
+                output_path.mkdir(parents=True, exist_ok=True)
+                
+                # 使用Florence2MultiTaskModel的保存方法
+                florence_model.save_pretrained(str(output_path))
+                
+                # 保存tokenizer
+                if save_tokenizer:
+                    try:
+                        tokenizer = AutoTokenizer.from_pretrained(
+                            merged_config.model_name,
+                            trust_remote_code=True
+                        )
+                        tokenizer.save_pretrained(output_path)
+                        logger.info("Tokenizer保存成功")
+                    except Exception as e:
+                        logger.warning(f"Tokenizer保存失败: {e}")
+                
+                logger.info(f"模型已保存到: {output_path}")
             
-            with open(output_path / 'merge_info.json', 'w', encoding='utf-8') as f:
-                json.dump(merge_info, f, indent=2, ensure_ascii=False)
-            
-            logger.info(f"模型合并并保存到: {output_path}")
+            logger.info("LoRA权重合并完成")
+            return florence_model
             
         except Exception as e:
-            logger.error(f"模型合并失败: {e}")
+            logger.error(f"合并LoRA权重失败: {e}")
             raise
     
     def merge_multiple_adapters(
@@ -208,24 +228,42 @@ class ModelMerger:
         Returns:
             合并后的模型
         """
-        # 创建模型副本
-        merged_model = type(base_model)(
-            model_name=base_model.model_name,
-            device=base_model.device
-        )
-        
-        # 复制基础模型权重
-        merged_model.load_state_dict(base_model.state_dict(), strict=False)
-        
-        # 合并LoRA权重
-        if merge_strategy == "linear":
-            self._linear_merge(merged_model, lora_weights)
-        elif merge_strategy == "weighted":
-            self._weighted_merge(merged_model, lora_weights)
-        else:
-            raise ValueError(f"不支持的合并策略: {merge_strategy}")
-        
-        return merged_model
+        try:
+            # 创建新的模型配置，禁用LoRA以避免冲突
+            merged_config = ModelConfig(
+                model_name=base_model.config.model_name,
+                use_lora=False,  # 合并后的模型不需要LoRA
+                trust_remote_code=base_model.config.trust_remote_code,
+                device=base_model.config.device if hasattr(base_model.config, 'device') else 'auto'
+            )
+            
+            # 创建新的模型实例
+            merged_model = Florence2MultiTaskModel(merged_config)
+            
+            # 获取基础模型的实际模型（可能是PeftModel包装的）
+            if hasattr(base_model.model, 'base_model'):
+                # 如果是PEFT模型，获取基础模型
+                base_state_dict = base_model.model.base_model.state_dict()
+            else:
+                base_state_dict = base_model.model.state_dict()
+            
+            # 加载基础权重
+            merged_model.model.load_state_dict(base_state_dict, strict=False)
+            
+            # 合并LoRA权重
+            if merge_strategy == "linear":
+                self._linear_merge(merged_model, lora_weights)
+            elif merge_strategy == "weighted":
+                self._weighted_merge(merged_model, lora_weights)
+            else:
+                raise ValueError(f"不支持的合并策略: {merge_strategy}")
+            
+            logger.info(f"模型合并完成，策略: {merge_strategy}")
+            return merged_model
+            
+        except Exception as e:
+            logger.error(f"创建合并模型失败: {e}")
+            raise
     
     def _linear_merge(
         self,
@@ -262,7 +300,8 @@ class ModelMerger:
         merged_model: Florence2MultiTaskModel,
         output_dir: Union[str, Path],
         export_format: str = "pytorch",
-        include_config: bool = True
+        include_config: bool = True,
+        optimize: bool = False
     ) -> None:
         """导出合并后的模型
         
@@ -271,14 +310,23 @@ class ModelMerger:
             output_dir: 输出目录
             export_format: 导出格式 ('pytorch', 'onnx', 'torchscript')
             include_config: 是否包含配置文件
+            optimize: 是否优化模型
         """
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
         
         try:
             if export_format == "pytorch":
-                # 保存PyTorch模型
-                merged_model.save_pretrained(output_path)
+                # 使用Florence2MultiTaskModel的保存方法
+                try:
+                    merged_model.save_pretrained(output_path)
+                    logger.info(f"PyTorch模型已保存到 {output_path}")
+                except Exception as e:
+                    logger.error(f"保存PyTorch模型失败: {e}")
+                    # 备用方案：直接保存模型状态字典
+                    model_path = output_path / "pytorch_model.bin"
+                    torch.save(merged_model.model.state_dict(), model_path)
+                    logger.info(f"使用备用方案保存模型状态字典到 {model_path}")
                 
             elif export_format == "onnx":
                 # 导出ONNX格式
@@ -293,15 +341,21 @@ class ModelMerger:
             
             # 保存导出信息
             if include_config:
-                export_info = {
-                    'export_format': export_format,
-                    'model_type': 'florence2_multitask',
-                    'export_timestamp': str(torch.utils.data.get_worker_info()),
-                    'model_size_mb': self._get_model_size_mb(output_path)
-                }
-                
-                with open(output_path / 'export_info.json', 'w', encoding='utf-8') as f:
-                    json.dump(export_info, f, indent=2, ensure_ascii=False)
+                try:
+                    export_info = {
+                        'export_format': export_format,
+                        'model_type': 'florence2_multitask',
+                        'export_timestamp': torch.utils.data.get_worker_info().id if torch.utils.data.get_worker_info() else 'main_process',
+                        'model_size_mb': self._get_model_size_mb(output_path),
+                        'optimized': optimize
+                    }
+                    
+                    with open(output_path / 'export_info.json', 'w', encoding='utf-8') as f:
+                        json.dump(export_info, f, indent=2, ensure_ascii=False)
+                    
+                    logger.info(f"模型导出完成，大小: {export_info['model_size_mb']:.2f} MB")
+                except Exception as e:
+                    logger.warning(f"保存模型信息失败: {e}")
             
             logger.info(f"模型已导出到: {output_path} (格式: {export_format})")
             
@@ -318,26 +372,43 @@ class ModelMerger:
         try:
             import onnx
             
-            # 创建示例输入
-            dummy_input_ids = torch.randint(0, 1000, (1, 512))
+            logger.warning("ONNX导出对Florence2MultiTaskModel可能不完全支持")
+            
+            # 获取实际的PyTorch模型
+            if hasattr(model, 'model'):
+                pytorch_model = model.model
+            else:
+                pytorch_model = model
+            
+            # 创建示例输入 - 需要匹配Florence2的输入格式
+            dummy_input_ids = torch.randint(0, 1000, (1, 10))
             dummy_pixel_values = torch.randn(1, 3, 224, 224)
             
-            # 导出ONNX
-            torch.onnx.export(
-                model,
-                (dummy_input_ids, dummy_pixel_values),
-                output_path / "model.onnx",
-                export_params=True,
-                opset_version=11,
-                do_constant_folding=True,
-                input_names=['input_ids', 'pixel_values'],
-                output_names=['output'],
-                dynamic_axes={
-                    'input_ids': {0: 'batch_size', 1: 'sequence'},
-                    'pixel_values': {0: 'batch_size'},
-                    'output': {0: 'batch_size'}
-                }
-            )
+            # 尝试导出ONNX（可能会失败）
+            try:
+                torch.onnx.export(
+                    pytorch_model,
+                    (dummy_pixel_values, dummy_input_ids),
+                    output_path / "model.onnx",
+                    export_params=True,
+                    opset_version=11,
+                    do_constant_folding=True,
+                    input_names=['pixel_values', 'input_ids'],
+                    output_names=['logits'],
+                    dynamic_axes={
+                        'pixel_values': {0: 'batch_size'},
+                        'input_ids': {0: 'batch_size'},
+                        'logits': {0: 'batch_size'}
+                    }
+                )
+                logger.info(f"ONNX模型已保存到 {output_path / 'model.onnx'}")
+            except Exception as export_error:
+                logger.error(f"ONNX导出失败: {export_error}")
+                # 保存错误信息
+                error_path = output_path / "onnx_export_error.txt"
+                with open(error_path, 'w') as f:
+                    f.write(f"ONNX导出失败: {export_error}")
+                raise
             
         except ImportError:
             logger.warning("ONNX库未安装，跳过ONNX导出")
@@ -352,34 +423,104 @@ class ModelMerger:
     ) -> None:
         """导出TorchScript格式"""
         try:
-            # 设置为评估模式
-            model.eval()
+            logger.warning("TorchScript导出对Florence2MultiTaskModel可能不完全支持")
             
-            # 创建示例输入
-            dummy_input_ids = torch.randint(0, 1000, (1, 512))
+            # 获取实际的PyTorch模型
+            if hasattr(model, 'model'):
+                pytorch_model = model.model
+            else:
+                pytorch_model = model
+            
+            # 创建示例输入 - 需要匹配Florence2的输入格式
+            dummy_input_ids = torch.randint(0, 1000, (1, 10))
             dummy_pixel_values = torch.randn(1, 3, 224, 224)
             
-            # 追踪模型
-            traced_model = torch.jit.trace(
-                model, (dummy_input_ids, dummy_pixel_values)
-            )
+            script_path = output_path / "model.pt"
             
-            # 保存TorchScript模型
-            traced_model.save(output_path / "model.pt")
+            # 尝试转换为TorchScript（可能会失败）
+            try:
+                pytorch_model.eval()
+                
+                # 尝试使用trace方法
+                try:
+                    traced_model = torch.jit.trace(
+                        pytorch_model, 
+                        (dummy_pixel_values, dummy_input_ids),
+                        strict=False
+                    )
+                    
+                    traced_model.save(script_path)
+                    logger.info(f"TorchScript模型已保存到 {script_path}")
+                    
+                except Exception as trace_error:
+                    logger.warning(f"Trace方法失败: {trace_error}，尝试script方法")
+                    
+                    # 尝试使用script方法
+                    try:
+                        scripted_model = torch.jit.script(pytorch_model)
+                        
+                        scripted_model.save(script_path)
+                        logger.info(f"TorchScript模型已保存到 {script_path}")
+                        
+                    except Exception as script_error:
+                        logger.error(f"Script方法也失败: {script_error}")
+                        # 保存错误信息
+                        error_path = output_path / "torchscript_export_error.txt"
+                        with open(error_path, 'w') as f:
+                            f.write(f"TorchScript导出失败:\nTrace错误: {trace_error}\nScript错误: {script_error}")
+                        raise script_error
+                        
+            except Exception as export_error:
+                logger.error(f"TorchScript导出失败: {export_error}")
+                raise
             
         except Exception as e:
             logger.error(f"TorchScript导出失败: {e}")
             raise
     
-    def _get_model_size_mb(self, model_path: Path) -> float:
-        """获取模型大小(MB)"""
+    def _get_model_size_mb(self, model_or_path) -> float:
+        """
+        获取模型大小（MB）
+        
+        Args:
+            model_or_path: 模型对象或模型文件路径
+        """
         try:
-            total_size = 0
-            for file_path in model_path.rglob('*'):
-                if file_path.is_file():
-                    total_size += file_path.stat().st_size
-            return total_size / (1024 * 1024)  # 转换为MB
-        except Exception:
+            # 如果是路径，计算文件大小
+            if isinstance(model_or_path, (str, Path)):
+                path = Path(model_or_path)
+                if path.is_file():
+                    return path.stat().st_size / (1024 * 1024)
+                elif path.is_dir():
+                    total_size = 0
+                    for file_path in path.rglob('*'):
+                        if file_path.is_file():
+                            total_size += file_path.stat().st_size
+                    return total_size / (1024 * 1024)
+                else:
+                    return 0.0
+            
+            # 如果是模型对象
+            param_size = 0
+            buffer_size = 0
+            
+            # 处理Florence2MultiTaskModel
+            if hasattr(model_or_path, 'model'):
+                actual_model = model_or_path.model
+            else:
+                actual_model = model_or_path
+            
+            for param in actual_model.parameters():
+                param_size += param.nelement() * param.element_size()
+            
+            for buffer in actual_model.buffers():
+                buffer_size += buffer.nelement() * buffer.element_size()
+            
+            size_mb = (param_size + buffer_size) / (1024 * 1024)
+            return size_mb
+            
+        except Exception as e:
+            logger.warning(f"计算模型大小失败: {e}")
             return 0.0
     
     def merge_all_adapters(
@@ -471,19 +612,43 @@ class ModelMerger:
             
             # 测试前向传播
             if test_inputs is None:
-                test_inputs = {
-                    'input_ids': torch.randint(0, 1000, (1, 512)),
-                    'pixel_values': torch.randn(1, 3, 224, 224)
-                }
+                # 创建测试输入 - 使用PIL Image格式
+                try:
+                    from PIL import Image
+                    import numpy as np
+                    # 创建一个简单的测试图像
+                    test_image_array = np.random.randint(0, 255, (224, 224, 3), dtype=np.uint8)
+                    test_images = Image.fromarray(test_image_array)
+                    test_task_prompt = "<CAPTION>"  # 测试任务提示
+                except ImportError:
+                    logger.warning("PIL不可用，跳过前向传播测试")
+                    validation_results['forward_pass'] = False
+                    validation_results['test_output'] = "PIL不可用，无法测试"
+                    return validation_results
+            else:
+                test_images = test_inputs.get('images')
+                test_task_prompt = test_inputs.get('task_prompt', "<CAPTION>")
             
-            merged_model.eval()
-            with torch.no_grad():
-                output = merged_model.generate(
-                    input_ids=test_inputs['input_ids'],
-                    pixel_values=test_inputs['pixel_values'],
-                    max_new_tokens=10
-                )
-                validation_results['forward_pass'] = True
+            # 只有在有有效测试输入时才进行测试
+            if test_images is not None:
+                merged_model.eval()
+                with torch.no_grad():
+                    try:
+                        # 使用正确的generate接口
+                        output = merged_model.generate(
+                            images=test_images,
+                            task_prompt=test_task_prompt,
+                            max_new_tokens=10
+                        )
+                        validation_results['forward_pass'] = True
+                        validation_results['test_output'] = output
+                    except Exception as gen_error:
+                        logger.warning(f"生成测试失败: {gen_error}")
+                        validation_results['forward_pass'] = False
+                        validation_results['test_output'] = f"生成失败: {gen_error}"
+            else:
+                validation_results['forward_pass'] = False
+                validation_results['test_output'] = "无有效测试输入"
             
             logger.info("模型验证通过")
             
