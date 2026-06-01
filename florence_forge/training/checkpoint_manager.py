@@ -8,6 +8,11 @@
 - 写新代码、走 v2 训练栈 → 用本文件的 `CheckpointManager`
 - 兼容旧脚本 / 仅需 save_model_only 工具 → 用 `checkpoint.py`
 
+收敛进度（v1.1.0）：两者已共用 `_checkpoint_io.py` 的底层原语
+（原子写 `atomic_torch_save`、fail-closed 加载 `load_checkpoint_file`、
+通用保留策略 `prune_checkpoints`），消除重复且易错的序列化逻辑；
+对外 API 与磁盘布局保持不变。完整合并见 `docs/v1_v2_Migration_Timeline.md`（v1.2.0）。
+
 测试覆盖：
 - `tests/test_checkpoint.py` → v1
 - `tests/test_training_integration.py` → v2
@@ -26,7 +31,7 @@ import torch
 import torch.nn as nn
 
 from ..core.config import TrainingConfig
-from ..utils.torch_serialization import safe_torch_load_cpu
+from ._checkpoint_io import atomic_torch_save, load_checkpoint_file, prune_checkpoints
 
 logger = logging.getLogger(__name__)
 
@@ -152,9 +157,9 @@ class CheckpointManager:
                 'config': self._config_to_dict()
             }
             
-            # 保存检查点
+            # 保存检查点（原子写，避免崩溃残留损坏文件）
             checkpoint_path = checkpoint_dir / "checkpoint.pt"
-            torch.save(checkpoint, checkpoint_path)
+            atomic_torch_save(checkpoint, checkpoint_path)
             
             # 保存配置
             config_path = checkpoint_dir / "config.json"
@@ -197,29 +202,24 @@ class CheckpointManager:
                 return self.model.state_dict()
     
     def _cleanup_old_checkpoints(self) -> None:
-        """清理旧检查点（保留最近 N 个）"""
-        if self.keep_checkpoints <= 0:
-            return
-        
-        # 获取所有检查点目录
-        checkpoint_dirs = sorted(
-            [d for d in self.output_dir.glob("checkpoint-epoch-*") if d.is_dir()],
-            key=lambda x: x.stat().st_mtime,
-            reverse=True
+        """清理旧检查点（保留最近 N 个，保护最佳模型）"""
+        import shutil
+
+        checkpoint_dirs = [
+            d for d in self.output_dir.glob("checkpoint-epoch-*") if d.is_dir()
+        ]
+
+        def _remove(d: Path) -> None:
+            shutil.rmtree(d)
+            logger.info(f"🗑️  已删除旧检查点：{d}")
+
+        prune_checkpoints(
+            checkpoint_dirs,
+            self.keep_checkpoints,
+            sort_key=lambda d: d.stat().st_mtime,
+            is_protected=lambda d: (d / "BEST_MODEL").exists(),
+            remove=_remove,
         )
-        
-        # 保留最近的 N 个
-        for old_dir in checkpoint_dirs[self.keep_checkpoints:]:
-            # 保护最佳模型
-            if (old_dir / "BEST_MODEL").exists():
-                continue
-            
-            try:
-                import shutil
-                shutil.rmtree(old_dir)
-                logger.info(f"🗑️  已删除旧检查点：{old_dir}")
-            except Exception as e:
-                logger.warning(f"删除检查点失败 {old_dir}: {e}")
     
     def _wait_for_pending_save(self) -> None:
         """等待待处理的异步保存任务完成"""
@@ -259,16 +259,10 @@ class CheckpointManager:
         
         logger.info(f"📂 加载检查点：{checkpoint_file}")
         
-        # 加载检查点
-        try:
-            checkpoint = safe_torch_load_cpu(checkpoint_file, context="Training checkpoint")
-        except Exception as e:
-            if "weights_only" in str(e).lower():
-                raise RuntimeError(
-                    f"检查点 {checkpoint_file} 需要 unsafe pickle 加载，已拒绝。"
-                    "请重新导出为 weights_only 兼容格式，或仅在完全信任来源时使用独立迁移脚本。"
-                ) from e
-            raise
+        # 加载检查点（统一 fail-closed 安全加载）
+        checkpoint = load_checkpoint_file(
+            checkpoint_file, map_location="cpu", context="Training checkpoint"
+        )
         
         # 恢复模型状态
         if self.accelerator is not None:
