@@ -5,37 +5,32 @@
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 [![Documentation](https://img.shields.io/badge/docs-latest-brightgreen)](docs/)
 
-**FlorenceForge** 是一个专为 Florence-2 模型设计的高效多任务微调框架，提供从数据处理到模型部署的完整解决方案。
+**FlorenceForge** 是一个面向视觉语言模型的多任务微调、评估与部署框架。它以 Florence-2 为主路径，同时通过统一的 VLM 后端注册表支持 PaliGemma、YouTuVL 和通用 Hugging Face VLM 后端。
+
+框架覆盖数据转换、JSONL 数据集、多任务调度、LoRA 微调、量化加载、评估指标、推理脚本和 FastAPI 服务，并提供 v1 兼容训练栈与 v2 模块化训练栈的并行迁移路径。
 
 ## ✨ 核心特性
 
-### 🎯 多任务支持
-- **图像描述**: CAPTION, DETAILED_CAPTION, MORE_DETAILED_CAPTION
-- **目标检测**: OD, OPEN_VOCABULARY_DETECTION, DENSE_REGION_CAPTION
-- **区域分析**: REGION_PROPOSAL, REGION_TO_CATEGORY, REGION_TO_DESCRIPTION
-- **文字识别**: OCR, OCR_WITH_REGION
-- **图像分割**: REFERRING_EXPRESSION_SEGMENTATION, REGION_TO_SEGMENTATION
+### 多任务 VLM 微调
+- 支持 Florence-2 原生任务注册表中的图像描述、目标检测、短语定位、OCR、区域分析和分割任务。
+- 支持单任务与多任务混合训练，任务权重可配置。
+- 训练数据统一使用 JSONL：`image`、`prefix`、`suffix`。
 
-### ⚡ 高效训练
-- **LoRA 微调**: 参数高效的适配器微调
-- **多任务混合训练**: 智能任务调度和权重平衡
-- **梯度累积**: 支持大批次训练
-- **混合精度**: 加速训练并节省显存
-- **分布式训练**: 基于 Accelerate 的多GPU支持
+### 后端与配置收敛
+- `VLMBackendRegistry` 是 VLM 后端的单一事实源。
+- `ArchitectureResolver` 保留为兼容门面，主要承接非 VLM 扩展和 builder 包装。
+- `model_config.revision` 和部署侧 `--model-revision` 可 pin Hugging Face 模型/处理器版本。
+- Pydantic v2 配置体系提供字段校验、兼容 alias 和 YAML/JSON 序列化。
 
-### 🔧 便捷工具
-- **命令行界面**: 一键训练、验证、数据转换
-- **配置管理**: 灵活的 YAML/JSON 配置系统
-- **数据转换**: 支持 YOLO、COCO、CSV、XML、OCR 格式
-- **可视化**: 训练过程监控和结果可视化
-- **模型部署**: FastAPI 服务器和推理优化
+### 训练与评估
+- v1 训练栈保留完整兼容性，v2 训练栈提供更清晰的模块边界。
+- 支持 Accelerate、FSDP/DeepSpeed 配置、混合精度、梯度累积、梯度检查点和检查点管理。
+- 评估模块包含多任务评估器、基础指标、高级指标、benchmark 缓存和可选 PDF 报告。
 
-### 📊 训练监控
-- **WandB 集成**: 实验跟踪和可视化
-- **SwanLab 支持**: 开源机器学习实验管理
-- **TensorBoard**: 传统的训练监控工具
-- **多平台同步**: 同时使用多个监控工具
-- **自动记录**: 训练指标、模型架构、梯度分布
+### 工具链
+- CLI 覆盖 `doctor`、`train`、`eval`、`infer`、`serve`、`convert`、`validate`、`generate-config`。
+- 数据转换支持 YOLO、COCO Detection、COCO Caption、CSV、VOC XML、OCR 目录和 OCR TXT。
+- FastAPI 服务默认只监听本机，显式传入 `--host 0.0.0.0` 才对外暴露。
 
 ## 🚀 快速开始
 
@@ -43,496 +38,454 @@
 
 - Python 3.8+
 - PyTorch 2.0+
-- CUDA 11.8+ (可选，支持 CPU 训练)
+- CUDA 11.8+ 可选；CPU/MPS 也可用于轻量验证
 
 ### 安装
 
 ```bash
-# 克隆仓库
 git clone https://github.com/florenceforge/florence-forge.git
 cd florence-forge
 
-# 安装依赖
+# 全功能入口：核心依赖 + 可选扩展
 pip install -r requirements.txt
 
-# 安装包
+# 开发环境
+pip install -r requirements-core.txt -r requirements-dev.txt
 pip install -e .
 
-# 验证安装
+# 验证 CLI
 florence_forge_cli --help
+florence_forge_cli doctor --device auto
 ```
 
-如需运行评估相关指标，建议额外安装：
+按需安装也可以更轻：
 
 ```bash
+# 最小核心
+pip install -r requirements-core.txt
+
+# 评估指标、监控、PDF 报告、增强等扩展
+pip install -r requirements-optional.txt
+
+# pyproject extras
 pip install -e ".[evaluation]"
+pip install -e ".[dev]"
 ```
 
-### 快速训练
+核心依赖已经显式约束主要兼容边界，例如 `accelerate<2`、`datasets<5`、`numpy<3`、`rich<16`。
+
+### CLI 最小训练流程
 
 ```bash
 # 1. 生成配置文件
 florence_forge_cli generate-config --task caption --output my_config.yaml
 
-# 2. 准备数据 (JSONL 格式：image/prefix/suffix)
+# 2. 准备一行 JSONL 样例
 echo '{"image": "path/to/image.jpg", "prefix": "<CAPTION>", "suffix": "A beautiful sunset"}' > data.jsonl
 
-# 3. 开始训练
-florence_forge_cli train --config my_config.yaml --epochs 5
+# 3. 启动训练。也可以在配置里写 train_data_path
+florence_forge_cli train \
+  --config my_config.yaml \
+  --train-data data.jsonl \
+  --epochs 5
 
-# 4. 查看结果
-ls outputs/
+# 4. 使用模块化 v2 训练栈
+florence_forge_cli train \
+  --config my_config.yaml \
+  --train-data data.jsonl \
+  --trainer-version v2
 ```
 
-### Python API 使用
+v1 当前仍是兼容默认值。若旧脚本需要临时静默 v1 迁移提示：
+
+```bash
+FLORENCE_FORGE_DISABLE_V1_TRAINER_WARNING=1 florence_forge_cli train --config my_config.yaml
+```
+
+### Python API
 
 ```python
-from florence_forge import TrainingConfig, MultiTaskTrainer
+from florence_forge import TrainingConfig
 from florence_forge.core.model import Florence2MultiTaskModel
 from florence_forge.data.dataset import MultiTaskDataset
+from florence_forge.training import MultiTaskTrainer, MultiTaskTrainerV2
 
-# 1. 加载配置
-config = TrainingConfig.from_yaml('config.yaml')
+config = TrainingConfig.from_yaml("my_config.yaml")
 
-# 2. 创建并加载模型
 model = Florence2MultiTaskModel(config.model_settings).load()
 
-# 3. 准备数据
-dataset = MultiTaskDataset(
+train_dataset = MultiTaskDataset(
     data_configs=[
         {
             "task_type": "CAPTION",
             "data_path": "data.jsonl",
-            "weight": 1.0
+            "weight": 1.0,
         }
     ],
-    config=config.data_settings
+    config=config.data_settings,
+    processor=model.processor,
 )
 
-# 4. 创建训练器
+# v1 兼容训练栈
 trainer = MultiTaskTrainer(
     model=model,
-    train_dataset=dataset,
-    config=config
+    train_dataset=train_dataset,
+    config=config,
 )
 
-# 5. 开始训练
+# v2 模块化训练栈可替换为：
+# trainer = MultiTaskTrainerV2(model=model, train_dataset=train_dataset, config=config)
+
 results = trainer.train()
-print(f"训练完成! 最终损失: {results['final_loss']}")
+print(results)
 ```
 
-## 📖 详细使用指南
+## 📖 数据与配置
 
-### 数据格式
-
-FlorenceForge 支持 JSONL 格式的数据文件，每行包含一个样本：
+### JSONL 数据格式
 
 ```json
-{"image": "path/to/image.jpg", "prefix": "<CAPTION>", "suffix": "描述文本"}
-{"image": "path/to/image2.jpg", "prefix": "<OD>", "suffix": "<loc_10><loc_20><loc_100><loc_200>目标类别"}
-{"image": "path/to/image3.jpg", "prefix": "<REGION_TO_DESCRIPTION>", "region": "<loc_50><loc_60><loc_150><loc_160>", "suffix": "区域描述"}
+{"image": "images/001.jpg", "prefix": "<CAPTION>", "suffix": "A small boat on the lake."}
+{"image": "images/002.jpg", "prefix": "<OD>", "suffix": "<loc_10><loc_20><loc_100><loc_200>person"}
+{"image": "images/003.jpg", "prefix": "<REGION_TO_DESCRIPTION><loc_50><loc_60><loc_150><loc_160>", "suffix": "a red sign"}
 ```
 
-### 配置文件详解
+`image` 可以配合 `MultiTaskDataset(image_base_path=...)` 使用相对路径；额外字段会进入样本 metadata。
+
+### 关键配置片段
 
 ```yaml
-# 模型配置
+num_epochs: 5
+max_steps: null
+output_dir: "./outputs/florence2_caption"
+gradient_accumulation_steps: 4
+use_fp16: false
+use_bf16: true
+
 model_config:
-  model_name: "microsoft/Florence-2-base"  # 基础模型
-  device: "auto"                          # 设备选择
-  torch_dtype: "float16"                  # 数据类型
-  trust_remote_code: true                 # 信任远程代码
+  model_name: "microsoft/Florence-2-base"
+  revision: null              # 生产环境建议写具体 commit hash
+  backend_name: "florence-2"  # florence-2 / paligemma / youtuvl / generic-hf
+  trust_remote_code: true
+  torch_dtype: "auto"
+  device: "auto"
+  device_map: "auto"
+  attn_implementation: "sdpa"
+  use_lora: true
+  lora_config:
+    r: 32
+    lora_alpha: 64
+    target_modules:
+      - "q_proj"
+      - "k_proj"
+      - "v_proj"
+      - "o_proj"
+      - "gate_proj"
+      - "up_proj"
+      - "down_proj"
+    lora_dropout: 0.05
+    bias: "none"
+    task_type: "CAUSAL_LM"
 
-# LoRA 配置
-lora_config:
-  r: 32                    # LoRA 秩
-  lora_alpha: 32          # LoRA alpha
-  target_modules: ["q_proj", "v_proj", "k_proj", "out_proj"]
-  lora_dropout: 0.05      # Dropout 率
-  bias: "none"            # 偏置设置
-  task_type: "FEATURE_EXTRACTION"
-
-# 训练配置
-training_config:
-  output_dir: "./outputs"              # 输出目录
-  num_epochs: 10                       # 训练轮数
-  batch_size: 8                        # 批次大小
-  gradient_accumulation_steps: 4       # 梯度累积
-  learning_rate: 1e-5                  # 学习率
-  weight_decay: 0.01                   # 权重衰减
-  warmup_steps: 500                    # 预热步数
-  max_grad_norm: 1.0                   # 梯度裁剪
-  mixed_precision: "fp16"              # 混合精度
-  
-# 数据配置
 data_config:
-  max_length: 1024        # 最大序列长度
-  image_size: [768, 768]  # 图像尺寸
-  num_workers: 4          # 数据加载器工作进程
-  pin_memory: true        # 内存固定
+  batch_size: 1
+  num_workers: 0
+  pin_memory: false
+  shuffle: false
+  use_augmentation: true
+  augmentation_prob: 0.3
+
+optimization_config:
+  learning_rate: 2.0e-5
+  weight_decay: 0.01
+  lr_scheduler_type: "cosine"
+  warmup_ratio: 0.1
+
+task_scheduling_config:
+  strategy: "weighted"
+  temperature: 1.0
 ```
 
-### 命令行工具
+`max_steps` 一旦设置为正数，会优先于 `num_epochs` 成为训练硬上限；v1/v2 训练栈语义一致。
 
-#### 训练模型
+## 🧰 命令行工具
+
+### 训练
+
 ```bash
-# 基础训练
-florence_forge_cli train --config config.yaml
+# 任务模板训练
+florence_forge_cli train --task caption --epochs 5
+
+# 自定义配置训练
+florence_forge_cli train --config config.yaml --train-data train.jsonl --val-data val.jsonl
 
 # 从检查点恢复
 florence_forge_cli train --config config.yaml --resume outputs/checkpoint-1000
 
 # 分布式训练
 accelerate launch --multi_gpu florence_forge_cli train --config config.yaml
+
+# 选择 v2 训练栈
+florence_forge_cli train --config config.yaml --trainer-version v2
 ```
 
-#### 模型评估
+### 评估
+
 ```bash
-# 评估模型
-florence_forge_cli evaluate --model outputs/final_model --data test_data.jsonl
-
-# 指定任务评估
-florence_forge_cli evaluate --model outputs/final_model --data test_data.jsonl --tasks CAPTION,OD
+florence_forge_cli eval --model outputs/final_model --data test_data.jsonl
+florence_forge_cli eval --model outputs/final_model --data test_data.jsonl --output results.json
 ```
 
-#### 数据转换
+### 推理
+
 ```bash
-# COCO 转 JSONL
-florence_forge_cli convert-data --format coco --input coco_annotations.json --output data.jsonl
+# 单张图片
+florence_forge_cli infer \
+  --model outputs/final_model \
+  --input image.jpg \
+  --output results \
+  --task-prompt "<CAPTION>"
 
-# YOLO 转 JSONL
-florence_forge_cli convert-data --format yolo --input yolo_labels/ --output data.jsonl
+# 目录批量推理
+florence_forge_cli infer \
+  --model outputs/final_model \
+  --input images/ \
+  --output results \
+  --batch-size 4 \
+  --use-amp
 ```
 
-#### 训练监控
+### 数据转换
+
 ```bash
-# 启用 WandB 监控
-florence_forge_cli train --config config.yaml \
-  --enable-wandb \
-  --wandb-project "florence2-experiments" \
-  --wandb-run-name "my-experiment"
+# YOLO
+florence_forge_cli convert yolo \
+  --labels-dir labels \
+  --images-dir images \
+  --classes-file classes.txt \
+  --output data.jsonl
 
-# 启用 SwanLab 监控
-florence_forge_cli train --config config.yaml \
-  --enable-swanlab \
-  --swanlab-project "florence2-training"
+# COCO Detection
+florence_forge_cli convert coco \
+  --json-file annotations.json \
+  --images-dir images \
+  --output data.jsonl
 
-# 启用所有监控工具
-florence_forge_cli train --config config.yaml \
-  --enable-wandb --enable-swanlab --enable-tensorboard
+# COCO Caption
+florence_forge_cli convert coco-caption \
+  --json-file captions.json \
+  --images-dir images \
+  --output captions.jsonl
+
+# CSV / VOC XML / OCR
+florence_forge_cli convert csv --csv-file captions.csv --output data.jsonl
+florence_forge_cli convert xml --xml-dir annotations --images-dir images --output data.jsonl
+florence_forge_cli convert ocr --images-dir images --texts-dir texts --output data.jsonl
+florence_forge_cli convert ocr-txt --txt-file ocr.tsv --images-dir images --output data.jsonl
 ```
 
-### 监控配置示例
+### 推理服务
 
-```python
-from florence_forge.training.config import TrainingConfig
-
-# 配置 WandB 监控
-config = TrainingConfig(
-    num_epochs=10,
-    batch_size=8,
-    learning_rate=1e-4,
-    output_dir="./outputs",
-    
-    # 启用 WandB
-    enable_wandb=True,
-    wandb_project="florence2-training",
-    wandb_entity="your-username",
-    wandb_run_name="experiment-1",
-    
-    # 同时启用其他监控工具
-    enable_swanlab=True,
-    enable_tensorboard=True,
-    
-    logging_steps=10,
-    eval_steps=1
-)
-
-# 训练会自动记录指标到所有启用的监控平台
-trainer = MultiTaskTrainer(model=model, train_dataset=dataset, config=config)
-results = trainer.train()
-```
-
-#### 模型推理
 ```bash
-# 单张图片推理
-florence_forge_cli infer --model outputs/final_model --image image.jpg --task CAPTION
+# 默认仅本机访问：127.0.0.1:8000
+florence_forge_cli serve --model outputs/final_model --port 8000
 
-# 批量推理
-florence_forge_cli infer --model outputs/final_model --input images/ --output results.json
-```
-
-#### 启动推理服务
-```bash
-# 启动 API 服务器
+# 对外暴露时必须显式指定 host，并自行配置鉴权和网络边界
 florence_forge_cli serve --model outputs/final_model --host 0.0.0.0 --port 8000
 
-# 测试 API
-curl -X POST "http://localhost:8000/predict" \
-     -H "Content-Type: application/json" \
-     -d '{"image_path": "image.jpg", "task": "CAPTION"}'
+# 生产环境建议 pin 模型/处理器 revision
+florence_forge_cli serve \
+  --model microsoft/Florence-2-base \
+  --model-revision <commit-hash> \
+  --port 8000
+
+# 健康检查
+curl http://127.0.0.1:8000/health
 ```
 
 ## 🏗️ 项目架构
 
-```
+```text
 florence_forge/
-├── 📁 core/                    # 核心模块
-│   ├── model.py               # Florence-2 模型封装
-│   ├── tasks.py               # 任务定义和管理
-│   └── lora_manager.py        # LoRA 适配器管理
-├── 📁 config/                  # 配置管理
-│   ├── training_config.py     # 训练配置
-│   ├── model_config.py        # 模型配置
-│   └── data_config.py         # 数据配置
-├── 📁 data/                    # 数据处理
-│   ├── dataset.py             # 多任务数据集
-│   ├── processor.py           # 数据预处理器
-│   ├── augmentation.py        # 数据增强
-│   └── converters/            # 格式转换器
-├── 📁 training/                # 训练模块
-│   ├── trainer.py             # 多任务训练器
-│   ├── scheduler.py           # 任务调度器
-│   └── callbacks.py           # 训练回调
-├── 📁 evaluation/              # 评估模块
-│   ├── evaluator.py           # 模型评估器
-│   ├── metrics.py             # 评估指标
-│   └── visualizer.py          # 结果可视化
-├── 📁 deployment/              # 部署模块
-│   ├── server.py              # FastAPI 服务器
-│   ├── inference.py           # 推理引擎
-│   ├── optimizer.py           # 模型优化
-│   └── exporter.py            # 模型导出
-├── 📁 utils/                   # 工具模块
-│   ├── image.py               # 图像处理
-│   ├── text.py                # 文本处理
-│   ├── io.py                  # 文件IO
-│   ├── logging.py             # 日志管理
-│   └── visualization.py       # 可视化工具
-├── 📁 scripts/                 # 脚本工具
-│   ├── cli.py                 # 命令行接口
-│   ├── train.py               # 训练脚本
-│   ├── evaluate.py            # 评估脚本
-│   └── convert_data.py        # 数据转换脚本
-└── 📁 examples/                # 示例代码
-    ├── basic_training.py       # 基础训练示例
-    ├── multi_task_training.py  # 多任务训练示例
-    └── custom_dataset.py       # 自定义数据集示例
+├── cli/
+│   ├── main.py                 # argparse 入口与子命令定义
+│   ├── commands.py             # train / infer / serve / eval / convert handlers
+│   ├── config_manager.py       # 配置管理
+│   └── _helpers.py             # CLI 共享常量与工具
+├── core/
+│   ├── config.py               # Pydantic v2 配置体系
+│   ├── model.py                # Florence2MultiTaskModel 与后端接入
+│   ├── tasks.py                # Florence-2 任务注册表
+│   ├── callbacks.py            # 回调管理
+│   ├── yaml_config.py          # YAML 配置加载
+│   ├── architecture_resolver.py # 兼容门面与非 VLM builder
+│   └── backends/
+│       ├── base_vlm.py         # BaseVLMBackend / VLMBackendRegistry
+│       ├── florence2_backend.py
+│       ├── paligemma_backend.py
+│       ├── youtuvl_backend.py
+│       └── generic_hf_backend.py
+├── data/
+│   ├── dataset.py              # MultiTaskDataset
+│   ├── converter.py            # YOLO / COCO / CSV / XML / OCR 转换
+│   ├── collate.py              # Florence2Collator
+│   ├── image_cache.py          # 图像 payload LRU 缓存
+│   ├── validator.py            # 数据校验
+│   ├── builder.py              # 数据集构建工具
+│   └── augmentation/           # 图像 / 文本 / bbox 增强
+├── training/
+│   ├── trainer.py              # v1 兼容训练栈
+│   ├── trainer_refactored.py   # v2 模块化训练器
+│   ├── training_loop.py        # v2 训练循环
+│   ├── checkpoint.py           # v1 checkpoint API
+│   ├── checkpoint_manager.py   # v2 checkpoint manager
+│   ├── _checkpoint_io.py       # v1/v2 共享安全序列化原语
+│   ├── lora_manager.py
+│   ├── scheduler.py
+│   ├── monitoring.py
+│   ├── visualizer.py
+│   └── multi_dataset_trainer.py
+├── evaluation/
+│   ├── evaluator.py
+│   ├── metrics.py
+│   ├── analyzer.py
+│   ├── benchmark*.py
+│   └── advanced_metrics/
+├── deployment/
+│   ├── inference.py
+│   ├── server.py
+│   ├── backends.py
+│   ├── exporter.py
+│   └── optimizer.py
+├── optimization/
+│   └── quantization.py
+├── experimental/
+│   └── moe/
+└── utils/
 ```
 
-## 📚 API 文档
+## 📚 API 速览
 
-### 核心类
-
-#### `Florence2MultiTaskModel`
-多任务 Florence-2 模型封装类。
+### 配置与模型
 
 ```python
-class Florence2MultiTaskModel:
-    def __init__(self, config: ModelConfig)
-    def forward(self, input_ids, pixel_values, labels=None) -> dict
-    def generate(self, input_ids, pixel_values, **kwargs) -> torch.Tensor
-    def get_trainable_parameters(self) -> int
+from florence_forge import TrainingConfig
+from florence_forge.core.config import ModelConfig
+from florence_forge.core.model import Florence2MultiTaskModel
+
+config = TrainingConfig.from_yaml("config.yaml")
+model = Florence2MultiTaskModel(config.model_settings).load()
 ```
 
-#### `MultiTaskTrainer`
-多任务训练器，支持 LoRA 微调和混合训练。
+### 后端注册表
 
 ```python
-class MultiTaskTrainer:
-    def __init__(self, model, train_dataset, config, val_dataset=None)
-    def train(self) -> dict
-    def evaluate(self, dataset=None) -> dict
-    def save_model(self, output_dir: str)
-    def load_checkpoint(self, checkpoint_path: str)
+from florence_forge.core.backends import VLMBackendRegistry, create_backend
+
+print(VLMBackendRegistry.list_backends())
+backend = create_backend("florence-2", config.model_settings)
 ```
 
-#### `MultiTaskDataset`
-多任务数据集类，支持动态任务采样。
+当前内置后端名称包括 `florence-2`/`florence2`、`paligemma`、`paligemma-3b`、`youtuvl`/`youtu-vl`/`tencent-youtuvl`、`generic-hf`/`auto`/`hf`。
+
+### 训练器
 
 ```python
-class MultiTaskDataset:
-    def __init__(self, data_configs: List[dict], config: DataConfig)
-    def __len__(self) -> int
-    def __getitem__(self, idx: int) -> dict
-    def get_task_weights(self) -> dict
+from florence_forge.training import MultiTaskTrainer, MultiTaskTrainerV2
+
+trainer_v1 = MultiTaskTrainer(model=model, train_dataset=train_dataset, config=config)
+trainer_v2 = MultiTaskTrainerV2(model=model, train_dataset=train_dataset, config=config)
 ```
 
-#### `MultiTaskEvaluator`
-模型评估器，支持多种评估指标。
+### 评估器
 
 ```python
-class MultiTaskEvaluator:
-    def __init__(self, model, device="auto")
-    def evaluate_dataset(self, dataset, **kwargs) -> dict
-    def evaluate_single(self, image, text, task_type) -> dict
-    def compute_metrics(self, predictions, references, task_type) -> dict
+from florence_forge.evaluation import MultiTaskEvaluator
+
+evaluator = MultiTaskEvaluator(model)
+results = evaluator.evaluate_dataset(eval_dataset)
 ```
 
-### 配置类
-
-#### `TrainingConfig`
-训练配置管理类。
+### 量化加载
 
 ```python
-class TrainingConfig:
-    @classmethod
-    def from_yaml(cls, yaml_path: str) -> 'TrainingConfig'
-    @classmethod
-    def from_dict(cls, config_dict: dict) -> 'TrainingConfig'
-    def to_yaml(self, yaml_path: str)
-    def to_dict(self) -> dict
+from florence_forge.optimization.quantization import ModelQuantizer, QuantizationConfig
+
+quantizer = ModelQuantizer(QuantizationConfig(method="bnb-4bit"))
+model, processor = quantizer.load_quantized_model("microsoft/Florence-2-base")
 ```
 
-### 工具函数
+## 🎯 支持的 Florence-2 任务
 
-#### 图像处理
-```python
-from florence_forge.utils.image import (
-    load_image,      # 加载图像
-    resize_image,    # 调整图像大小
-    normalize_image  # 图像标准化
-)
+| 任务类型 | 描述 | 是否需要文本输入 |
+|---------|------|------------------|
+| `CAPTION` | 基础图像描述 | 否 |
+| `DETAILED_CAPTION` | 详细图像描述 | 否 |
+| `MORE_DETAILED_CAPTION` | 更详细图像描述 | 否 |
+| `CAPTION_TO_PHRASE_GROUNDING` | 标题到短语定位 | 是 |
+| `DENSE_REGION_CAPTION` | 密集区域描述 | 否 |
+| `OD` | 通用目标检测 | 否 |
+| `OPEN_VOCABULARY_DETECTION` | 开放词汇检测 | 是 |
+| `REGION_PROPOSAL` | 区域提议 | 否 |
+| `REGION_TO_CATEGORY` | 区域到类别 | 是 |
+| `REGION_TO_DESCRIPTION` | 区域到描述 | 是 |
+| `OCR` | 光学字符识别 | 否 |
+| `OCR_WITH_REGION` | 带区域 OCR | 否 |
+| `REGION_TO_SEGMENTATION` | 区域到分割 | 是 |
+| `REFERRING_EXPRESSION_SEGMENTATION` | 指代表达式分割 | 是 |
+
+## 🧪 开发与验证
+
+```bash
+# 安装开发依赖
+pip install -r requirements-core.txt -r requirements-dev.txt
+pip install -e .
+
+# 单元测试
+pytest -q
+
+# 覆盖率门禁示例
+pytest tests --cov=florence_forge --cov-report=term-missing --cov-fail-under=35
+
+# 可选 PDF 报告测试需要 reportlab
+pip install "reportlab>=4.0.0,<5.0.0"
+pytest tests/test_benchmark_reports.py -q
 ```
 
-#### 文本处理
-```python
-from florence_forge.utils.text import (
-    clean_text,           # 清理文本
-    extract_bbox_from_text,  # 从文本提取边界框
-    format_task_prompt    # 格式化任务提示
-)
-```
+CI 和本地测试中，缺失可选依赖的能力会通过 `pytest.importorskip` 或框架内的 optional dependency guard 优雅跳过。
 
-## 🎯 支持的任务类型
+## 🗺️ 路线图
 
-| 任务类型 | 描述 | 输入格式 | 输出格式 |
-|---------|------|----------|----------|
-| `CAPTION` | 图像描述 | 图像 | 文本描述 |
-| `DETAILED_CAPTION` | 详细图像描述 | 图像 | 详细文本描述 |
-| `MORE_DETAILED_CAPTION` | 更详细图像描述 | 图像 | 更详细文本描述 |
-| `OD` | 目标检测 | 图像 | 边界框 + 类别 |
-| `DENSE_REGION_CAPTION` | 密集区域描述 | 图像 | 区域 + 描述 |
-| `REGION_PROPOSAL` | 区域提议 | 图像 | 候选区域 |
-| `OCR` | 文字识别 | 图像 | 识别文字 |
-| `OCR_WITH_REGION` | 带区域的文字识别 | 图像 | 文字 + 位置 |
-| `REFERRING_EXPRESSION_SEGMENTATION` | 指代表达式分割 | 图像 + 文本 | 分割掩码 |
-| `REGION_TO_SEGMENTATION` | 区域分割 | 图像 + 区域 | 分割掩码 |
-| `OPEN_VOCABULARY_DETECTION` | 开放词汇检测 | 图像 + 类别 | 边界框 |
-| `REGION_TO_CATEGORY` | 区域分类 | 图像 + 区域 | 类别 |
-| `REGION_TO_DESCRIPTION` | 区域描述 | 图像 + 区域 | 文本描述 |
-
-## 📊 性能基准
-
-### 训练效率
-| 配置 | 批次大小 | 显存占用 | 训练速度 |
-|------|----------|----------|----------|
-| Florence-2-base + LoRA | 8 | ~12GB | ~2.5 it/s |
-| Florence-2-large + LoRA | 4 | ~16GB | ~1.8 it/s |
-| 多任务混合训练 | 8 | ~14GB | ~2.2 it/s |
-
-### 模型性能
-| 任务 | 数据集 | 指标 | 基线模型 | FlorenceForge |
-|------|--------|------|----------|---------------|
-| 图像描述 | COCO Captions | BLEU-4 | 32.1 | **34.5** |
-| 目标检测 | COCO Detection | mAP@0.5 | 42.3 | **44.1** |
-| 文字识别 | TextOCR | F1-Score | 78.9 | **81.2** |
-| 区域描述 | Visual Genome | CIDEr | 89.4 | **92.1** |
-
-## 🔧 高级功能
-
-### 自定义任务
-
-```python
-from florence_forge.core.tasks import register_task, TaskCategory
-
-@register_task("CUSTOM_TASK", TaskCategory.GENERATION)
-class CustomTask:
-    def format_prompt(self, **kwargs):
-        return "<CUSTOM_TASK>"
-    
-    def parse_response(self, response):
-        return {"result": response}
-```
-
-### 自定义数据增强
-
-```python
-from florence_forge.data.augmentation import BaseAugmentation
-
-class CustomAugmentation(BaseAugmentation):
-    def __call__(self, image, annotations):
-        # 自定义增强逻辑
-        return augmented_image, augmented_annotations
-```
-
-### 模型量化
-
-```python
-from florence_forge.optimization.quantization import ModelQuantizer
-
-quantizer = ModelQuantizer()
-quantized_model = quantizer.quantize_model(model, calibration_data)
-print(f"模型大小减少: {quantizer.get_compression_ratio():.2f}x")
-```
-
-## 🚧 开发路线图
-
-- [x] 核心框架和多任务训练
-- [x] LoRA 微调支持
-- [x] 命令行工具
-- [x] 数据格式转换
-- [x] 模型评估和可视化
-- [x] FastAPI 推理服务
-- [ ] 模型量化和剪枝
-- [ ] 在线学习支持
-- [ ] 联邦学习框架
-- [ ] 模型蒸馏
-- [ ] AutoML 超参数优化
+- [x] Pydantic v2 配置体系
+- [x] VLM 后端抽象与注册表
+- [x] Florence-2 / PaliGemma / YouTuVL / Generic HF 后端
+- [x] 数据转换、校验和缓存增强
+- [x] FastAPI 推理服务安全默认 host
+- [x] v2 训练栈显式导出与 CLI 选择
+- [ ] 继续补齐 v2 与 v1 的高级训练能力对等
+- [ ] 进一步收敛 v1/v2 checkpoint 对外 API
+- [ ] 扩充每个 CLI 子命令的端到端集成冒烟
+- [ ] 增强公开 API 文档与示例覆盖
 
 ## 🤝 贡献指南
 
-我们欢迎各种形式的贡献！请查看 [CONTRIBUTING.md](CONTRIBUTING.md) 了解详情。
-
-### 开发环境设置
+欢迎提交 issue、测试样例、后端适配、数据转换器和训练/评估改进。开发前建议先运行：
 
 ```bash
-# 克隆仓库
-git clone https://github.com/florenceforge/florence-forge.git
-cd florence-forge
-
-# 创建开发环境
-conda create -n florenceforge python=3.9
-conda activate florenceforge
-
-# 安装开发依赖
-pip install -e ".[dev]"
-
-# 运行测试
-pytest tests/
-
-# 代码格式化
-black florence_forge/
-flake8 florence_forge/
+florence_forge_cli doctor --device auto
+pytest -q
 ```
 
 ## 📄 许可证
 
-本项目采用 MIT 许可证 - 查看 [LICENSE](LICENSE) 文件了解详情。
+本项目采用 MIT 许可证，详情见 [LICENSE](LICENSE)。
 
 ## 🙏 致谢
 
-- 感谢 Microsoft 的 Florence 团队提供的优秀基础模型
-- 感谢 Hugging Face 提供的 Transformers 和 PEFT 库
-- 感谢开源社区的贡献和支持
-
-## 📞 联系我们
-
-- 📧 Email: florenceforge@example.com
-- 💬 Discord: [FlorenceForge Community](https://discord.gg/florenceforge)
-- 🐛 Issues: [GitHub Issues](https://github.com/florenceforge/florence-forge/issues)
-- 📖 文档: [在线文档](https://florenceforge.readthedocs.io/)
+- Microsoft Florence 团队提供的 Florence-2 基础模型
+- Hugging Face Transformers、PEFT、Accelerate 与 Datasets 生态
+- PyTorch、FastAPI、Pydantic 和开源社区
 
 ---
 
-**FlorenceForge** - 让多模态AI开发更简单、更强大！
+**FlorenceForge** - 面向多任务 VLM 微调的可扩展工具链。
