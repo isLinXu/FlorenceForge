@@ -9,6 +9,7 @@ import torch
 import torch.nn as nn
 import time
 import threading
+import warnings
 from unittest.mock import MagicMock, patch
 from pathlib import Path
 from collections import defaultdict
@@ -132,6 +133,42 @@ class TestMultiTaskTrainerInit:
         )
         assert trainer.model is mock_model
         assert trainer.config is mock_config
+
+
+class TestTrainerStackMigration:
+    def test_v1_trainer_warning_is_one_time_and_suppressible(self, monkeypatch):
+        import florence_forge.training.trainer as trainer_module
+
+        trainer_module._V1_TRAINER_WARNING_EMITTED = False
+        monkeypatch.delenv(trainer_module._V1_WARNING_DISABLE_ENV, raising=False)
+
+        with pytest.warns(DeprecationWarning, match="v1 training stack"):
+            trainer_module._maybe_warn_v1_trainer_deprecated()
+
+        with warnings.catch_warnings(record=True) as captured:
+            warnings.simplefilter("always")
+            trainer_module._maybe_warn_v1_trainer_deprecated()
+
+        assert captured == []
+
+        trainer_module._V1_TRAINER_WARNING_EMITTED = False
+        monkeypatch.setenv(trainer_module._V1_WARNING_DISABLE_ENV, "1")
+        with warnings.catch_warnings(record=True) as captured:
+            warnings.simplefilter("always")
+            trainer_module._maybe_warn_v1_trainer_deprecated()
+
+        assert captured == []
+
+    def test_training_packages_export_v2_aliases(self):
+        import florence_forge
+        import florence_forge.training as training
+        from florence_forge.training.trainer_refactored import (
+            MultiTaskTrainer as TrainerV2,
+        )
+
+        assert training.MultiTaskTrainerV2 is TrainerV2
+        assert training.TrainerV2 is TrainerV2
+        assert florence_forge.TrainerV2 is TrainerV2
 
 
 class TestAcceleratorCompat:

@@ -29,6 +29,20 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _select_trainer_class(version: str):
+    """Select the training stack requested by CLI or programmatic callers."""
+    normalized = (version or "v1").strip().lower()
+    if normalized in {"v1", "legacy"}:
+        from florence_forge.training.trainer import MultiTaskTrainer
+
+        return MultiTaskTrainer
+    if normalized in {"v2", "refactored", "modular"}:
+        from florence_forge.training.trainer_refactored import MultiTaskTrainer
+
+        return MultiTaskTrainer
+    raise ValueError(f"不支持的训练器版本: {version}")
+
+
 def run_inference_task(args) -> bool:
     """运行推理任务"""
     try:
@@ -238,6 +252,9 @@ def run_serve_task(args) -> bool:
     logger.info(f"   监听地址: {host}:{port}")
     logger.info(f"   设备: {args.device}")
     logger.info(f"   后端: {getattr(args, 'backend', 'native')}")
+    model_revision = getattr(args, 'model_revision', None)
+    if model_revision:
+        logger.info(f"   模型 revision: {model_revision}")
 
     server = create_server(
         model_path=model_path,
@@ -247,9 +264,91 @@ def run_serve_task(args) -> bool:
         backend=getattr(args, 'backend', 'native'),
         batch_size=getattr(args, 'batch_size', 1),
         use_amp=getattr(args, 'use_amp', False),
+        model_revision=model_revision,
     )
     server.run(host=host, port=port)
     return True
+
+
+def _build_eval_dataset_from_jsonl(data_path: str, model) -> "MultiTaskDataset":
+    """从 Florence-2 JSONL 评估文件构建 ``MultiTaskDataset``。
+
+    JSONL 每行形如 ``{"image": ..., "prefix": "<OD>", "suffix": ...}``，
+    任务类型由 ``prefix`` 推断（匹配 ``FLORENCE2_TASKS`` 中的 prompt）。
+    文件可能混合多种任务，这里按任务类型分组写入临时文件，再构建数据集。
+
+    Args:
+        data_path: JSONL 评估数据文件路径
+        model: 已加载的模型，提供 processor 用于在线编码
+
+    Returns:
+        构建好的 MultiTaskDataset 实例
+    """
+    import json
+    import tempfile
+    from collections import defaultdict
+
+    from florence_forge.core.tasks import FLORENCE2_TASKS
+    from florence_forge.data.dataset import MultiTaskDataset
+
+    source = Path(data_path)
+    if not source.exists():
+        raise FileNotFoundError(f"评估数据文件不存在: {source}")
+
+    # prompt -> task_type 映射，按 prompt 长度降序匹配（避免短 prompt 误匹配）
+    prompt_to_task = sorted(
+        ((cfg.get("prompt", ""), name) for name, cfg in FLORENCE2_TASKS.items()),
+        key=lambda item: len(item[0]),
+        reverse=True,
+    )
+
+    def _infer_task_type(prefix: str) -> Optional[str]:
+        prefix = (prefix or "").strip()
+        for prompt, name in prompt_to_task:
+            if prompt and prefix.startswith(prompt):
+                return name
+        return None
+
+    grouped_lines: "defaultdict[str, list]" = defaultdict(list)
+    skipped = 0
+    with open(source, "r", encoding="utf-8") as f:
+        for raw in f:
+            line = raw.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                skipped += 1
+                continue
+            task_type = _infer_task_type(record.get("prefix", ""))
+            if task_type is None:
+                skipped += 1
+                continue
+            grouped_lines[task_type].append(line)
+
+    if not grouped_lines:
+        raise ValueError(
+            f"无法从 {source} 推断出任何受支持的任务类型，"
+            f"请确认每行包含可识别的 prefix（如 <OD>、<CAPTION>）。"
+        )
+    if skipped:
+        logger.warning(f"评估数据中有 {skipped} 行无法解析或无法识别任务类型，已跳过")
+
+    # 按任务类型分组写入临时文件
+    temp_dir = Path(tempfile.mkdtemp(prefix="florence_eval_"))
+    data_configs = []
+    for task_type, lines in grouped_lines.items():
+        task_file = temp_dir / f"{task_type}.jsonl"
+        with open(task_file, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+        data_configs.append({"task_type": task_type, "data_path": str(task_file)})
+        logger.info(f"   任务 {task_type}: {len(lines)} 个样本")
+
+    dataset = MultiTaskDataset(data_configs, processor=model.processor)
+    # 记录临时目录，便于调用方在评估结束后清理
+    dataset._eval_temp_dir = str(temp_dir)  # type: ignore[attr-defined]
+    return dataset
 
 
 def run_eval_task(args) -> bool:
@@ -268,22 +367,31 @@ def run_eval_task(args) -> bool:
     logger.info(f"   评估数据: {data_path}")
     logger.info(f"   设备: {args.device}")
 
+    dataset = None
     try:
         from florence_forge.core.model import Florence2MultiTaskModel
         from florence_forge.core.config import ModelConfig
 
         # 加载模型
-        model_config = ModelConfig(model_name=model_path)
+        model_config = ModelConfig(
+            model_name=model_path,
+            device=args.device,
+            use_lora=False,
+        )
         model = Florence2MultiTaskModel(model_config)
         model.load()
 
-        # 创建评估器
-        evaluator = MultiTaskEvaluator(model)
-        metrics = evaluator.evaluate(data_path=data_path)
+        # 从评估数据构建数据集
+        dataset = _build_eval_dataset_from_jsonl(data_path, model)
 
-        # 输出评估结果
+        # 创建评估器并评估整个数据集
+        evaluator = MultiTaskEvaluator(model, device=args.device)
+        results = evaluator.evaluate_dataset(dataset)
+
+        # 输出评估结果（总体指标）
         logger.info("📈 评估结果:")
-        for metric_name, metric_value in metrics.items():
+        overall_metrics = results.get("overall_metrics", {})
+        for metric_name, metric_value in overall_metrics.items():
             logger.info(
                 f"   {metric_name}: {metric_value:.4f}"
                 if isinstance(metric_value, float)
@@ -296,7 +404,7 @@ def run_eval_task(args) -> bool:
             output_path = Path(args.output)
             output_path.parent.mkdir(parents=True, exist_ok=True)
             with open(output_path, 'w', encoding='utf-8') as f:
-                json.dump(metrics, f, indent=2, ensure_ascii=False, default=str)
+                json.dump(results, f, indent=2, ensure_ascii=False, default=str)
             logger.info(f"   评估结果已保存: {output_path}")
 
         return True
@@ -306,6 +414,13 @@ def run_eval_task(args) -> bool:
         import traceback
         logger.error(f"详细错误信息: {traceback.format_exc()}")
         return False
+
+    finally:
+        # 清理评估期间生成的临时文件
+        temp_dir = getattr(dataset, "_eval_temp_dir", None) if dataset is not None else None
+        if temp_dir:
+            import shutil
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 def run_data_conversion(args) -> bool:
@@ -413,7 +528,8 @@ def run_training_task(
     try:
         from florence_forge.core.model import Florence2MultiTaskModel
         from florence_forge.training.config import load_config_from_file
-        from florence_forge.training.trainer import MultiTaskTrainer
+        trainer_version = overrides.pop("trainer_version", "v1")
+        MultiTaskTrainer = _select_trainer_class(trainer_version)
 
         # 确定配置文件路径
         if config:
@@ -473,6 +589,7 @@ def run_training_task(
         logger.info("🚀 开始训练任务")
         logger.info(f"   任务类型: {task or 'custom'}")
         logger.info(f"   配置文件: {actual_config_path}")
+        logger.info(f"   训练器版本: {trainer_version}")
 
         if overrides:
             logger.info(f"   参数覆盖: {overrides}")

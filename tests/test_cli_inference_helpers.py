@@ -8,12 +8,14 @@ from unittest.mock import patch
 from PIL import Image
 
 from florence_forge.cli.main import (
+    create_parser,
     _is_supported_image_file,
     _iter_image_files,
     _normalize_inference_stats,
     run_doctor_task,
     run_inference_task,
 )
+from florence_forge.cli.commands import _select_trainer_class
 
 
 def test_supported_image_file_is_case_insensitive(tmp_path):
@@ -46,6 +48,24 @@ def test_normalize_inference_stats_fills_missing_fields():
     assert stats["total_time"] == 0.0
     assert stats["avg_inference_time"] == 0.0
     assert stats["throughput"] == 0.0
+
+
+def test_train_parser_accepts_trainer_version_v2():
+    parser = create_parser()
+
+    args = parser.parse_args(["train", "--task", "caption", "--trainer-version", "v2"])
+
+    assert args.trainer_version == "v2"
+
+
+def test_select_trainer_class_supports_v2_aliases():
+    from florence_forge.training.trainer import MultiTaskTrainer as TrainerV1
+    from florence_forge.training.trainer_refactored import MultiTaskTrainer as TrainerV2
+
+    assert _select_trainer_class("v1") is TrainerV1
+    assert _select_trainer_class("legacy") is TrainerV1
+    assert _select_trainer_class("v2") is TrainerV2
+    assert _select_trainer_class("modular") is TrainerV2
 
 
 def test_run_inference_task_accepts_minimal_engine_stats(tmp_path):
