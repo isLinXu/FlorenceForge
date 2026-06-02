@@ -94,6 +94,11 @@ class ModelConfig(WarnOnUnknownFieldsModel):
         default="microsoft/Florence-2-large",
         description="HuggingFace 模型标识符",
     )
+    revision: Optional[str] = Field(
+        default=None,
+        description="HuggingFace 模型/处理器的版本（分支名、tag 或 commit hash）。"
+        "强烈建议在生产环境 pin 到具体 commit，以避免上游变更带来的供应链风险。",
+    )
     trust_remote_code: bool = Field(default=True)
     torch_dtype: str = Field(
         default="auto",

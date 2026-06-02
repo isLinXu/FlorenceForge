@@ -88,6 +88,11 @@ class TestVLMBackendRegistry:
         VLMBackendRegistry.register("dummy2", DummyBackend)
         assert sorted(VLMBackendRegistry.list_backends()) == ["dummy1", "dummy2"]
 
+    def test_get_backend_class(self):
+        VLMBackendRegistry.register("dummy", DummyBackend)
+
+        assert VLMBackendRegistry.get_backend_class("DUMMY") is DummyBackend
+
     def test_is_registered(self):
         VLMBackendRegistry.register("dummy", DummyBackend)
         assert VLMBackendRegistry.is_registered("dummy") is True
@@ -171,3 +176,41 @@ class TestFlorence2BackendRegistration:
         VLMBackendRegistry.register("florence2", Florence2Backend)
         assert VLMBackendRegistry.is_registered("florence-2")
         assert VLMBackendRegistry.is_registered("florence2")
+
+    def test_legacy_language_model_gets_generation_mixin(self):
+        """旧 Florence-2 remote code 缺少 generate 时应动态补齐。"""
+        from transformers import PretrainedConfig, PreTrainedModel
+        from transformers.generation import GenerationMixin
+
+        from florence_forge.core.backends.florence2_backend import (
+            _ensure_language_model_generation_mixin,
+        )
+
+        class LegacyLanguageModel(PreTrainedModel):
+            config_class = PretrainedConfig
+
+            def __init__(self):
+                super().__init__(PretrainedConfig(is_encoder_decoder=True))
+
+            def prepare_inputs_for_generation(self, *args, **kwargs):
+                return {}
+
+        class FlorenceWrapper(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.language_model = LegacyLanguageModel()
+
+        wrapper = FlorenceWrapper()
+        assert not callable(getattr(wrapper.language_model, "generate", None))
+        # transformers>=5 raises AttributeError instead of returning None for an
+        # unset generation_config; use getattr so the precondition stays valid
+        # across versions.
+        assert getattr(wrapper.language_model, "generation_config", None) is None
+
+        patched = _ensure_language_model_generation_mixin(wrapper)
+
+        assert patched is True
+        assert callable(getattr(wrapper.language_model, "generate", None))
+        assert isinstance(wrapper.language_model, GenerationMixin)
+        assert wrapper.language_model.__class__.can_generate() is True
+        assert wrapper.language_model.generation_config is not None

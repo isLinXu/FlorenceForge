@@ -81,6 +81,33 @@ def test_model_server_accepts_backend_directly():
     assert server._get_model_info() == {"backend": "dummy"}
 
 
+def test_model_server_predict_endpoint_updates_stats():
+    pytest.importorskip("fastapi")
+    from fastapi.testclient import TestClient
+
+    from florence_forge.deployment.server import ModelServer
+
+    server = ModelServer(DummyBackend())
+    client = TestClient(server.app)
+
+    response = client.post(
+        "/predict",
+        json={"data": [1.0, 2.0], "format": "array", "return_raw": True},
+    )
+    stats_response = client.get("/stats")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["success"] is True
+    assert payload["result"] == [1.0, 2.0]
+    assert stats_response.status_code == 200
+    stats = stats_response.json()
+    assert stats["total_requests"] == 1
+    assert stats["successful_requests"] == 1
+    assert stats["failed_requests"] == 0
+    assert stats["model_info"] == {"backend": "dummy"}
+
+
 def test_vllm_backend_fails_with_actionable_error():
     with pytest.raises((ImportError, NotImplementedError)):
         VLLMInferenceBackend("dummy-model")
@@ -91,3 +118,34 @@ def test_create_server_rejects_unknown_backend_before_model_load():
 
     with pytest.raises(ValueError, match="不支持的推理后端"):
         create_server("dummy-model", backend="unknown")
+
+
+def test_create_server_forwards_model_revision(monkeypatch):
+    pytest.importorskip("fastapi")
+
+    from florence_forge.deployment.server import create_server
+
+    captured = {}
+
+    class FakeInferenceEngine(DummyEngine):
+        def __init__(self, model, device, **kwargs):
+            super().__init__()
+            captured["model"] = model
+            captured["device"] = device
+            captured.update(kwargs)
+
+    monkeypatch.setattr(
+        "florence_forge.deployment.server.InferenceEngine",
+        FakeInferenceEngine,
+    )
+
+    server = create_server(
+        "dummy-model",
+        device="cpu",
+        model_revision="abc123",
+    )
+
+    assert captured["model"] == "dummy-model"
+    assert captured["device"] == "cpu"
+    assert captured["model_revision"] == "abc123"
+    assert server.host == "127.0.0.1"

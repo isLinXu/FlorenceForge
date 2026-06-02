@@ -42,7 +42,8 @@ class InferenceEngine:
         batch_size: int = 1,
         use_amp: bool = False,
         compile_model: bool = False,
-        allow_unsafe_torch_load: bool = False
+        allow_unsafe_torch_load: bool = False,
+        model_revision: Optional[str] = None,
     ):
         """初始化推理引擎
         
@@ -54,12 +55,15 @@ class InferenceEngine:
             compile_model: 是否编译模型
             allow_unsafe_torch_load: 是否允许对本地 .pt/.pth 文件使用
                 weights_only=False 的 pickle 反序列化。仅对可信文件启用。
+            model_revision: HuggingFace 模型/处理器 revision（分支、tag 或 commit）。
+                生产环境建议传入具体 commit hash 以固定供应链输入。
         """
         self.device = self._setup_device(device)
         self.batch_size = batch_size
         self.use_amp = use_amp
         self.compile_model = compile_model
         self.allow_unsafe_torch_load = allow_unsafe_torch_load
+        self.model_revision = model_revision
         
         # 加载模型
         self.model = self._load_model(model)
@@ -453,6 +457,22 @@ class InferenceEngine:
                 device = "mps" if mps_available else "cpu"
         
         return torch.device(device)
+
+    def _build_model_config_kwargs(
+        self,
+        model_name: str,
+        revision: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """构造部署加载路径使用的 ModelConfig 参数。"""
+        config_kwargs: Dict[str, Any] = {
+            "model_name": model_name,
+            "device": str(self.device),
+            "use_lora": False,
+        }
+        effective_revision = getattr(self, "model_revision", None) or revision
+        if effective_revision:
+            config_kwargs["revision"] = effective_revision
+        return config_kwargs
     
     def _load_model(self, model: Union[nn.Module, str, Path]) -> nn.Module:
         """加载模型，支持本地路径、Hugging Face模型ID、LoRA模型和TorchScript。
@@ -494,7 +514,10 @@ class InferenceEngine:
                             adapter_config = json.load(f)
                         
                         base_model_name = adapter_config.get('base_model_name_or_path', 'microsoft/Florence-2-base')
-                        config = ModelConfig(model_name=base_model_name)
+                        config = ModelConfig(**self._build_model_config_kwargs(
+                            base_model_name,
+                            revision=adapter_config.get("revision"),
+                        ))
                         
                         loaded_model = Florence2MultiTaskModel.load_pretrained(
                             model_identifier, 
@@ -505,7 +528,7 @@ class InferenceEngine:
                     else:
                         # 加载Hugging Face基础模型（来自Hub或本地）
                         logger.info(f"尝试加载Hugging Face模型: {model_identifier}")
-                        config = ModelConfig(model_name=model_identifier)
+                        config = ModelConfig(**self._build_model_config_kwargs(model_identifier))
                         loaded_model = Florence2MultiTaskModel(config)
                         # 显式加载模型和处理器（延迟加载模式）
                         loaded_model.load()

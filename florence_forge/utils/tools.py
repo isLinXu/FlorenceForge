@@ -106,7 +106,9 @@ class FileHasher:
         Returns:
             MD5哈希值
         """
-        hash_md5 = hashlib.md5()
+        # MD5 仅用于文件去重/校验，不用于任何安全/信任决策；
+        # usedforsecurity=False 明确这一点，并兼容 FIPS 受限环境。
+        hash_md5 = hashlib.md5(usedforsecurity=False)
         with open(file_path, "rb") as f:
             for chunk in iter(lambda: f.read(chunk_size), b""):
                 hash_md5.update(chunk)
@@ -191,6 +193,12 @@ class ConfigManager:
                 with open(self.config_path, 'r', encoding='utf-8') as f:
                     self.config_data = yaml.safe_load(f)
             elif suffix == ".pkl":
+                # 安全警告：pickle 会执行任意代码，仅应加载可信来源的配置文件
+                logger.warning(
+                    "正在通过 pickle.load 加载配置 %s；pickle 会执行任意代码，"
+                    "只应加载可信来源的 .pkl 文件。",
+                    self.config_path,
+                )
                 with open(self.config_path, 'rb') as f:
                     self.config_data = pickle.load(f)
             else:

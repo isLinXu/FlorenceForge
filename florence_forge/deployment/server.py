@@ -111,7 +111,7 @@ class ModelServer:
     def __init__(
         self,
         inference_engine: Union[InferenceEngine, InferenceBackend],
-        host: str = "0.0.0.0",
+        host: str = "127.0.0.1",
         port: int = 8000,
         title: str = "Florence Forge Model Server",
         description: str = "Florence-2 模型推理服务",
@@ -561,7 +561,7 @@ class ModelServer:
 
 def create_server(
     model_path: Union[str, Path],
-    host: str = "0.0.0.0",
+    host: str = "127.0.0.1",
     port: int = 8000,
     device: str = "auto",
     backend: str = "native",
@@ -575,7 +575,7 @@ def create_server(
         port: 服务器端口
         device: 设备类型
         backend: 推理后端，支持 native 或 vllm
-        **engine_kwargs: 推理引擎其他参数
+        **engine_kwargs: 推理引擎其他参数，如 model_revision、batch_size、use_amp
         
     Returns:
         模型服务器实例
@@ -606,10 +606,18 @@ if __name__ == "__main__":
     
     parser = argparse.ArgumentParser(description="Florence Forge Model Server")
     parser.add_argument("--model", required=True, help="模型路径")
-    parser.add_argument("--host", default="0.0.0.0", help="服务器主机")
+    parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="服务器主机 (默认: 127.0.0.1，仅本机；对外暴露请显式指定 0.0.0.0)",
+    )
     parser.add_argument("--port", type=int, default=8000, help="服务器端口")
     parser.add_argument("--device", default="auto", help="设备类型")
     parser.add_argument("--backend", default="native", choices=["native", "vllm"], help="推理后端")
+    parser.add_argument(
+        "--model-revision",
+        help="HuggingFace 模型/处理器 revision（建议生产环境使用具体 commit hash）",
+    )
     parser.add_argument("--batch-size", type=int, default=1, help="批处理大小")
     parser.add_argument("--use-amp", action="store_true", help="使用自动混合精度")
     parser.add_argument("--compile", action="store_true", help="编译模型")
@@ -623,6 +631,7 @@ if __name__ == "__main__":
         port=args.port,
         device=args.device,
         backend=args.backend,
+        model_revision=args.model_revision,
         batch_size=args.batch_size,
         use_amp=args.use_amp,
         compile_model=args.compile

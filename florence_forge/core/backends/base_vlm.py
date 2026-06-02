@@ -11,12 +11,30 @@ import logging
 import warnings
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, ClassVar, Dict, List, Optional, Type, Union
+from typing import Any, ClassVar, Dict, List, Optional, Protocol, Type, Union
 
 import torch
 import torch.nn as nn
 
 logger = logging.getLogger(__name__)
+
+
+class BackendConfig(Protocol):
+    """结构化描述 VLM 后端实际消费的配置字段。
+
+    后端仍然通过 ``getattr`` 保持向后兼容；该 Protocol 主要服务于静态分析、
+    IDE 补全和第三方后端实现者的类型契约。
+    """
+
+    model_name: str
+    revision: Optional[str]
+    trust_remote_code: bool
+    torch_dtype: str
+    device: str
+    device_map: str
+    attn_implementation: Optional[str]
+    use_fp16: bool
+    use_bf16: bool
 
 
 def _check_flash_attn_availability() -> bool:
@@ -79,7 +97,7 @@ class BaseVLMBackend(ABC, nn.Module):
 
     _backends: ClassVar[Dict[str, Type["BaseVLMBackend"]]] = {}
 
-    def __init__(self, config: Any):
+    def __init__(self, config: BackendConfig):
         super().__init__()
         self.config = config
         self._model: Optional[nn.Module] = None
@@ -180,6 +198,11 @@ class BaseVLMBackend(ABC, nn.Module):
             "torch_dtype": torch_dtype,
         }
 
+        # 可选地 pin HuggingFace revision，降低供应链风险
+        revision = getattr(self.config, "revision", None)
+        if revision:
+            kwargs["revision"] = revision
+
         device_map = getattr(self.config, "device_map", "auto")
         if device == "cpu":
             kwargs["device_map"] = None
@@ -224,10 +247,13 @@ class BaseVLMBackend(ABC, nn.Module):
     def _load_processor_base(self, processor_cls: Any, model_name: str) -> None:
         if processor_cls is None:
             raise RuntimeError("处理器类不可用，请检查 transformers 依赖")
-        self._processor = processor_cls.from_pretrained(
-            model_name,
-            trust_remote_code=getattr(self.config, "trust_remote_code", True),
-        )
+        processor_kwargs: Dict[str, Any] = {
+            "trust_remote_code": getattr(self.config, "trust_remote_code", True),
+        }
+        revision = getattr(self.config, "revision", None)
+        if revision:
+            processor_kwargs["revision"] = revision
+        self._processor = processor_cls.from_pretrained(model_name, **processor_kwargs)
 
     def encode(
         self,
@@ -406,31 +432,43 @@ class VLMBackendRegistry:
 
     _backends: ClassVar[Dict[str, Type["BaseVLMBackend"]]] = {}
 
-    @classmethod
-    def register(cls, name: str, backend_class: type):
-        if not issubclass(backend_class, BaseVLMBackend):
-            raise TypeError(f"后端类必须继承自 BaseVLMBackend，得到 {backend_class}")
-        cls._backends[name.lower()] = backend_class
+    @staticmethod
+    def _normalize_name(name: str) -> str:
+        key = name.strip().lower()
+        if not key:
+            raise ValueError("后端名称不能为空")
+        return key
 
     @classmethod
-    def create(cls, name: str, config: Any) -> BaseVLMBackend:
-        key = name.lower()
+    def register(cls, name: str, backend_class: Type["BaseVLMBackend"]) -> None:
+        if not isinstance(backend_class, type) or not issubclass(backend_class, BaseVLMBackend):
+            raise TypeError(f"后端类必须继承自 BaseVLMBackend，得到 {backend_class}")
+        cls._backends[cls._normalize_name(name)] = backend_class
+
+    @classmethod
+    def get_backend_class(cls, name: str) -> Type["BaseVLMBackend"]:
+        """返回已注册后端类，作为解析器等模块的公共查询 API。"""
+        key = cls._normalize_name(name)
         if key not in cls._backends:
-            available = ", ".join(cls._backends.keys())
+            available = ", ".join(cls.list_backends())
             raise ValueError(f"未知后端: {key}。可用后端: {available}")
-        return cls._backends[key](config)
+        return cls._backends[key]
+
+    @classmethod
+    def create(cls, name: str, config: BackendConfig) -> BaseVLMBackend:
+        return cls.get_backend_class(name)(config)
 
     @classmethod
     def list_backends(cls) -> List[str]:
-        return list(cls._backends.keys())
+        return sorted(cls._backends.keys())
 
     @classmethod
     def is_registered(cls, name: str) -> bool:
-        return name.lower() in cls._backends
+        return cls._normalize_name(name) in cls._backends
 
 
 _registry = VLMBackendRegistry()
 
 
-def create_backend(name: str, config: Any) -> BaseVLMBackend:
+def create_backend(name: str, config: BackendConfig) -> BaseVLMBackend:
     return _registry.create(name, config)
