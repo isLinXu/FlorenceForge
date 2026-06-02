@@ -1,0 +1,84 @@
+# PaliGemma LoRA training on coco128 object detection.
+# Generate the JSONL first with:
+# python scripts/data-conversion/convert_florence_od_to_paligemma.py \
+#   --input-jsonl data/coco128/coco128_od.jsonl \
+#   --output-jsonl data/coco128/coco128_paligemma_od.jsonl
+
+num_epochs: 1
+max_steps: 20
+eval_steps: 1
+save_steps: 1000
+logging_steps: 1
+
+output_dir: "./outputs/coco128_paligemma_od_lora"
+logging_dir: "./outputs/coco128_paligemma_od_lora/logs"
+generate_training_report_on_end: false
+async_training_report: false
+save_full_model_on_end: false
+
+device: "auto"
+use_fp16: false
+use_bf16: false
+gradient_accumulation_steps: 1
+save_total_limit: 1
+load_best_model_at_end: false
+metric_for_best_model: "eval_loss"
+greater_is_better: false
+
+tasks:
+  - "OD"
+task_weights:
+  OD: 1.0
+train_data_path: "./data/coco128/coco128_paligemma_od.jsonl"
+val_data_path: "./data/coco128/coco8_paligemma_od.jsonl"
+
+model_config:
+  model_name: "google/paligemma-3b-pt-224"
+  backend_name: "paligemma"
+  trust_remote_code: true
+  torch_dtype: "auto"
+  device: "auto"
+  device_map: "auto"
+  attn_implementation: "eager"
+  use_lora: true
+  lora_config:
+    r: 16
+    lora_alpha: 32
+    target_modules:
+      - "q_proj"
+      - "k_proj"
+      - "v_proj"
+      - "o_proj"
+      - "gate_proj"
+      - "up_proj"
+      - "down_proj"
+    lora_dropout: 0.05
+    bias: "none"
+    task_type: "CAUSAL_LM"
+
+data_config:
+  batch_size: 1
+  num_workers: 0
+  pin_memory: false
+  shuffle: true
+  drop_last: false
+  use_augmentation: false
+  use_balanced_sampling: false
+  use_cache: false
+
+optimization_config:
+  learning_rate: 5.0e-5
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  lr_scheduler_type: "linear"
+  warmup_ratio: 0.0
+  warmup_steps: 0
+
+task_scheduling_config:
+  strategy: "round_robin"
+  temperature: 1.0
+  update_frequency: 100
+
+distributed_config:
+  enabled: false
+  strategy: "none"

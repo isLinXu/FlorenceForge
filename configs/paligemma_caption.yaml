@@ -1,38 +1,63 @@
-# PaliGemma Caption 训练配置示例
-# 参考: roboflow/maestro 统一接口设计
+# PaliGemma caption LoRA training example.
 
-# 模型配置
-model:
+num_epochs: 10
+max_steps: null
+eval_steps: 500
+save_steps: 500
+logging_steps: 10
+
+output_dir: "./outputs/paligemma_caption"
+logging_dir: "./outputs/paligemma_caption/logs"
+save_full_model_on_end: false
+device: "auto"
+use_fp16: false
+use_bf16: true
+gradient_accumulation_steps: 1
+save_total_limit: 3
+load_best_model_at_end: true
+metric_for_best_model: "eval_loss"
+greater_is_better: false
+
+tasks:
+  - "CAPTION"
+task_weights:
+  CAPTION: 1.0
+train_data_path: "./data/paligemma_caption_train.jsonl"
+val_data_path: "./data/paligemma_caption_val.jsonl"
+
+model_config:
   model_name: "google/paligemma-3b-pt-224"
   backend_name: "paligemma"
   trust_remote_code: true
+  torch_dtype: "auto"
+  device: "auto"
+  device_map: "auto"
+  attn_implementation: "eager"
   use_lora: true
   lora_config:
     r: 16
     lora_alpha: 32
     target_modules:
       - "q_proj"
-      - "v_proj"
       - "k_proj"
+      - "v_proj"
       - "o_proj"
     lora_dropout: 0.05
     bias: "none"
     task_type: "CAUSAL_LM"
 
-# 数据配置
-data:
-  batch_size: 4
+data_config:
+  batch_size: 2
   num_workers: 2
   pin_memory: true
   shuffle: true
-  drop_last: true
+  drop_last: false
   use_augmentation: false
   use_balanced_sampling: true
   use_cache: true
   cache_dir: "./cache/paligemma"
 
-# 优化配置
-optimization:
+optimization_config:
   learning_rate: 1.0e-4
   weight_decay: 0.01
   adam_beta1: 0.9
@@ -42,34 +67,11 @@ optimization:
   lr_scheduler_type: "cosine"
   warmup_ratio: 0.1
 
-# 训练配置
-training:
-  num_epochs: 10
-  max_steps: null
-  gradient_accumulation_steps: 1
-  logging_steps: 10
-  save_steps: 500
-  eval_steps: 500
-  output_dir: "./output/paligemma_caption"
-  logging_dir: "./logs/paligemma_caption"
-  save_total_limit: 3
-  greater_is_better: false
-  metric_for_best_model: "eval_loss"
-  early_stopping_patience: 5
-  device: "auto"
-  use_fp16: false
-  use_bf16: true
-
-# 任务调度配置
-task_scheduling:
+task_scheduling_config:
   strategy: "round_robin"
-  initial_weights: null
   temperature: 1.0
+  update_frequency: 100
 
-# 监控配置
-monitoring:
-  use_wandb: false
-  use_tensorboard: true
-  use_swanlab: false
-  log_gradients: false
-  log_parameters: false
+distributed_config:
+  enabled: false
+  strategy: "none"
