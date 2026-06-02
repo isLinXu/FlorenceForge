@@ -34,6 +34,67 @@ from ..tasks import FLORENCE2_TASKS, get_task_config
 logger = logging.getLogger(__name__)
 
 
+def _ensure_language_model_generation_mixin(model: torch.nn.Module) -> bool:
+    """Restore generation support for older Florence-2 remote code.
+
+    Transformers 4.50+ removed GenerationMixin from PreTrainedModel. Some
+    Florence-2 remote-code checkpoints still define generate() on the wrapper
+    model but delegate to ``language_model.generate()``, while the nested
+    language model only implements ``prepare_inputs_for_generation``. Patch the
+    nested instance at runtime so local checkpoints remain usable.
+    """
+    language_model = getattr(model, "language_model", None)
+    if language_model is None:
+        return False
+
+    if callable(getattr(language_model, "generate", None)):
+        _ensure_generation_config(language_model)
+        return False
+
+    if not callable(getattr(language_model, "prepare_inputs_for_generation", None)):
+        return False
+
+    try:
+        from transformers.generation import GenerationConfig, GenerationMixin
+    except Exception as exc:
+        logger.warning("无法导入 GenerationMixin，Florence-2 推理生成可能不可用: %s", exc)
+        return False
+
+    original_cls = language_model.__class__
+    if not issubclass(original_cls, GenerationMixin):
+        patched_cls = type(
+            f"{original_cls.__name__}WithGenerationMixin",
+            (original_cls, GenerationMixin),
+            {
+                "__module__": original_cls.__module__,
+                "__doc__": original_cls.__doc__,
+            },
+        )
+        language_model.__class__ = patched_cls
+
+    if getattr(language_model, "generation_config", None) is None:
+        language_model.generation_config = GenerationConfig.from_model_config(language_model.config)
+
+    logger.info(
+        "已为旧版 Florence-2 language_model 动态补齐 GenerationMixin，"
+        "以兼容 transformers>=4.50 的 generate() 行为"
+    )
+    return True
+
+
+def _ensure_generation_config(language_model: torch.nn.Module) -> None:
+    if getattr(language_model, "generation_config", None) is not None:
+        return
+    config = getattr(language_model, "config", None)
+    if config is None:
+        return
+    try:
+        from transformers.generation import GenerationConfig
+    except Exception:
+        return
+    language_model.generation_config = GenerationConfig.from_model_config(config)
+
+
 class Florence2Backend(BaseVLMBackend):
     """Florence-2 模型后端
 
@@ -88,6 +149,8 @@ class Florence2Backend(BaseVLMBackend):
             model_name=self.config.model_name,
             model_kwargs=model_kwargs
         )
+        if self._model is not None:
+            _ensure_language_model_generation_mixin(self._model)
 
     def load_processor(self) -> None:
         """加载 Florence-2 Processor"""

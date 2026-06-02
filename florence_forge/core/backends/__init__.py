@@ -19,6 +19,7 @@ MoE / SSM 等实验性组件已迁移到 `florence_forge.experimental.moe`，
 
 from .base_vlm import (
     BaseVLMBackend,
+    BackendConfig,
     VLMBackendRegistry,
     create_backend,
     _check_flash_attn_availability,
@@ -37,6 +38,7 @@ def auto_select_backend(config):
 
 __all__ = [
     "BaseVLMBackend",
+    "BackendConfig",
     "VLMBackendRegistry",
     "create_backend",
     "auto_select_backend",

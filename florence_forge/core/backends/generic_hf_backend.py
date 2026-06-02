@@ -184,12 +184,14 @@ class GenericHFBackend(BaseVLMBackend):
         """加载处理器（AutoProcessor 或 Tokenizer+ImageProcessor）"""
         trust_remote_code = getattr(self.config, "trust_remote_code", True)
         model_name = self.config.model_name
+        revision = getattr(self.config, "revision", None)
+        revision_kwargs = {"revision": revision} if revision else {}
 
         # 尝试 AutoProcessor
         if AutoProcessor is not None:
             try:
                 self._processor = AutoProcessor.from_pretrained(
-                    model_name, trust_remote_code=trust_remote_code
+                    model_name, trust_remote_code=trust_remote_code, **revision_kwargs
                 )
                 logger.info("Processor 加载成功 (AutoProcessor)")
                 return
@@ -200,7 +202,8 @@ class GenericHFBackend(BaseVLMBackend):
         if AutoTokenizer is not None:
             try:
                 self._tokenizer = AutoTokenizer.from_pretrained(
-                    model_name, trust_remote_code=trust_remote_code, use_fast=True
+                    model_name, trust_remote_code=trust_remote_code, use_fast=True,
+                    **revision_kwargs
                 )
                 logger.info("Tokenizer 加载成功")
             except Exception as e:
@@ -209,7 +212,7 @@ class GenericHFBackend(BaseVLMBackend):
         if AutoImageProcessor is not None:
             try:
                 self._image_processor = AutoImageProcessor.from_pretrained(
-                    model_name, trust_remote_code=trust_remote_code
+                    model_name, trust_remote_code=trust_remote_code, **revision_kwargs
                 )
                 logger.info("ImageProcessor 加载成功")
             except Exception as e:
