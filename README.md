@@ -49,8 +49,8 @@
 
 ```bash
 # 克隆仓库
-git clone https://github.com/florenceforge/florenceforge.git
-cd florence_forge
+git clone https://github.com/florenceforge/florence-forge.git
+cd florence-forge
 
 # 安装依赖
 pip install -r requirements.txt
@@ -62,14 +62,20 @@ pip install -e .
 florence_forge_cli --help
 ```
 
+如需运行评估相关指标，建议额外安装：
+
+```bash
+pip install -e ".[evaluation]"
+```
+
 ### 快速训练
 
 ```bash
 # 1. 生成配置文件
 florence_forge_cli generate-config --task caption --output my_config.yaml
 
-# 2. 准备数据 (JSONL 格式)
-echo '{"image": "path/to/image.jpg", "text": "A beautiful sunset", "task_type": "CAPTION"}' > data.jsonl
+# 2. 准备数据 (JSONL 格式：image/prefix/suffix)
+echo '{"image": "path/to/image.jpg", "prefix": "<CAPTION>", "suffix": "A beautiful sunset"}' > data.jsonl
 
 # 3. 开始训练
 florence_forge_cli train --config my_config.yaml --epochs 5
@@ -88,8 +94,8 @@ from florence_forge.data.dataset import MultiTaskDataset
 # 1. 加载配置
 config = TrainingConfig.from_yaml('config.yaml')
 
-# 2. 创建模型
-model = Florence2MultiTaskModel(config.model_config)
+# 2. 创建并加载模型
+model = Florence2MultiTaskModel(config.model_settings).load()
 
 # 3. 准备数据
 dataset = MultiTaskDataset(
@@ -100,7 +106,7 @@ dataset = MultiTaskDataset(
             "weight": 1.0
         }
     ],
-    config=config.data_config
+    config=config.data_settings
 )
 
 # 4. 创建训练器
@@ -122,9 +128,9 @@ print(f"训练完成! 最终损失: {results['final_loss']}")
 FlorenceForge 支持 JSONL 格式的数据文件，每行包含一个样本：
 
 ```json
-{"image": "path/to/image.jpg", "text": "描述文本", "task_type": "CAPTION"}
-{"image": "path/to/image2.jpg", "bbox": [10, 20, 100, 200], "text": "目标类别", "task_type": "OD"}
-{"image": "path/to/image3.jpg", "region": "<loc_50><loc_60><loc_150><loc_160>", "text": "区域描述", "task_type": "REGION_TO_DESCRIPTION"}
+{"image": "path/to/image.jpg", "prefix": "<CAPTION>", "suffix": "描述文本"}
+{"image": "path/to/image2.jpg", "prefix": "<OD>", "suffix": "<loc_10><loc_20><loc_100><loc_200>目标类别"}
+{"image": "path/to/image3.jpg", "prefix": "<REGION_TO_DESCRIPTION>", "region": "<loc_50><loc_60><loc_150><loc_160>", "suffix": "区域描述"}
 ```
 
 ### 配置文件详解
@@ -492,8 +498,8 @@ print(f"模型大小减少: {quantizer.get_compression_ratio():.2f}x")
 
 ```bash
 # 克隆仓库
-git clone https://github.com/florenceforge/florenceforge.git
-cd florence_forge
+git clone https://github.com/florenceforge/florence-forge.git
+cd florence-forge
 
 # 创建开发环境
 conda create -n florenceforge python=3.9
@@ -524,7 +530,7 @@ flake8 florence_forge/
 
 - 📧 Email: florenceforge@example.com
 - 💬 Discord: [FlorenceForge Community](https://discord.gg/florenceforge)
-- 🐛 Issues: [GitHub Issues](https://github.com/florenceforge/florenceforge/issues)
+- 🐛 Issues: [GitHub Issues](https://github.com/florenceforge/florence-forge/issues)
 - 📖 文档: [在线文档](https://florenceforge.readthedocs.io/)
 
 ---

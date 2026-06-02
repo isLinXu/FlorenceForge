@@ -1,4 +1,11 @@
-"""Model checkpoint management module.
+"""Model checkpoint management module (v1, 函数式工具集).
+
+⚠️ 仓库内同时存在两个 `CheckpointManager`：
+- 本文件 (v1)：`CheckpointManager` + 配套 `create_checkpoint_manager / save_model_only / load_model_only` 函数式工具，被 `trainer.py`（v1 训练栈）和外部脚本使用。
+- `checkpoint_manager.py` (v2)：OO 生命周期版，供 `trainer_refactored.py`（v2 训练栈）使用。
+
+二者**分工明确，不要混用**。详情见 `checkpoint_manager.py` 顶部说明。
+（v1.1.0 起两者已共用 `_checkpoint_io.py` 的底层序列化原语，见该模块说明。）
 
 This module provides functionality for saving and loading training checkpoints,
 including model state, optimizer state, and training metadata.
@@ -8,6 +15,11 @@ import json
 import torch
 import logging
 from datetime import datetime
+from typing import Union, List, Dict, Any, Optional
+from pathlib import Path
+
+from ..utils.torch_serialization import safe_torch_load
+from ._checkpoint_io import atomic_torch_save, load_checkpoint_file
 
 logger = logging.getLogger(__name__)
 
@@ -82,8 +94,8 @@ class CheckpointManager:
             checkpoint_data['scheduler_state_dict'] = scheduler.state_dict()
         
         try:
-            # Save checkpoint
-            torch.save(checkpoint_data, checkpoint_path)
+            # Save checkpoint (atomic write to avoid truncated files on crash)
+            atomic_torch_save(checkpoint_data, checkpoint_path)
             
             # Update checkpoint metadata
             checkpoint_info = {
@@ -106,7 +118,7 @@ class CheckpointManager:
                 
                 # Save best checkpoint separately
                 best_path = self.checkpoint_dir / "best_checkpoint.pt"
-                torch.save(checkpoint_data, best_path)
+                atomic_torch_save(checkpoint_data, best_path)
                 logger.info(f"New best checkpoint saved: {best_path}")
             
             # Clean up old checkpoints
@@ -140,11 +152,12 @@ class CheckpointManager:
             Checkpoint metadata
         """
         try:
-            # Load checkpoint
-            if device is not None:
-                checkpoint_data = torch.load(checkpoint_path, map_location=device)
-            else:
-                checkpoint_data = torch.load(checkpoint_path)
+            # Load checkpoint without enabling arbitrary pickle execution on supported PyTorch versions.
+            checkpoint_data = load_checkpoint_file(
+                checkpoint_path,
+                map_location=device,
+                context="Training checkpoint",
+            )
             
             # Load model state
             model.load_state_dict(checkpoint_data['model_state_dict'])
@@ -384,10 +397,14 @@ def load_model_only(
         Metadata from the saved file
     """
     try:
+        load_kwargs = {}
         if device is not None:
-            save_data = torch.load(load_path, map_location=device)
-        else:
-            save_data = torch.load(load_path)
+            load_kwargs["map_location"] = device
+        save_data = safe_torch_load(
+            load_path,
+            context="Model checkpoint",
+            **load_kwargs,
+        )
         
         model.load_state_dict(save_data['model_state_dict'])
         

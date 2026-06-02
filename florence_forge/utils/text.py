@@ -7,6 +7,7 @@ import re
 import json
 import logging
 import unicodedata
+from collections import Counter
 from typing import List, Tuple, Dict, Any, Optional
 
 logger = logging.getLogger(__name__)

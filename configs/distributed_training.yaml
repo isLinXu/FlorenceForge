@@ -1,0 +1,136 @@
+# FlorenceForge 分布式训练配置示例
+# 适用于多 GPU / 多节点训练场景
+#
+# 启动方式（使用 torchrun）:
+#   torchrun --nproc_per_node=4 --nnodes=1 examples/train.py --config configs/distributed_training.yaml
+#
+# 多节点示例:
+#   torchrun --nproc_per_node=8 --nnodes=2 --node_rank=0 --master_addr="192.168.1.1" \
+#     examples/train.py --config configs/distributed_training.yaml
+
+# 训练设置
+num_epochs: 10
+max_steps: null
+eval_steps: 100
+save_steps: 500
+logging_steps: 50
+
+# 输出目录
+output_dir: "./outputs/distributed_run"
+logging_dir: "./outputs/distributed_run/logs"
+
+# 混合精度
+use_fp16: false
+use_bf16: true
+
+# 梯度累积（分布式环境下可适当降低）
+gradient_accumulation_steps: 2
+
+# 检查点管理
+save_total_limit: 3
+load_best_model_at_end: true
+metric_for_best_model: "eval_loss"
+greater_is_better: false
+
+# 实验跟踪
+experiment_name: "florence2_distributed"
+run_name: "ddp_4gpu"
+tags:
+  - "distributed"
+  - "multigpu"
+  - "production"
+
+# 模型配置
+model_config:
+  model_name: "microsoft/Florence-2-large"
+  trust_remote_code: true
+  torch_dtype: "bfloat16"
+  device_map: "auto"
+  attn_implementation: "flash_attention_2"
+  use_lora: true
+
+  # LoRA 配置
+  lora_config:
+    r: 32
+    lora_alpha: 64
+    target_modules:
+      - "q_proj"
+      - "k_proj"
+      - "v_proj"
+      - "o_proj"
+    lora_dropout: 0.05
+    bias: "none"
+    task_type: "CAUSAL_LM"
+
+  # 激活值重计算策略
+  # auto 策略会根据模型大小自动选择:
+  #   <1B: none  |  1B-7B: full  |  >=7B: selective
+  gradient_checkpointing: true
+  activation_checkpointing_strategy: "auto"
+  checkpoint_target_layers: null
+  checkpoint_every_n_layers: null
+
+# 数据配置
+data_config:
+  batch_size: 4              # 每个 GPU 的 batch size（总 batch = 4 * num_gpus）
+  num_workers: 4
+  pin_memory: true
+  shuffle: true
+  drop_last: true
+
+  # 分布式数据加载优化
+  prefetch_factor: 4
+  persistent_workers: true
+
+  # 数据增强
+  use_augmentation: true
+  augmentation_prob: 0.2
+
+  # 数据平衡
+  use_balanced_sampling: true
+
+  # 分布式采样器种子
+  distributed_seed: 42
+
+# 优化配置
+optimization_config:
+  learning_rate: 1.0e-05
+  weight_decay: 0.01
+  adam_beta1: 0.9
+  adam_beta2: 0.999
+  adam_epsilon: 1.0e-08
+  max_grad_norm: 1.0
+
+  # 学习率调度（分布式训练通常需要更长的 warmup）
+  lr_scheduler_type: "cosine"
+  warmup_ratio: 0.1
+  warmup_steps: null
+
+# 任务调度配置
+task_scheduling_config:
+  strategy: "weighted"
+  temperature: 1.0
+  update_frequency: 100
+
+# ==========================================
+# 分布式训练配置（核心配置）
+# ==========================================
+distributed_config:
+  enabled: true
+  strategy: "ddp"            # 选项: ddp / fsdp / deepspeed / none
+  backend: "nccl"            # nccl (推荐用于GPU) / gloo (CPU) / mpi
+
+  # ---- FSDP 配置（当 strategy=fsdp 时启用）----
+  # fsdp_sharding_strategy: "FULL_SHARD"        # FULL_SHARD / SHARD_GRAD_OP / HYBRID_SHARD
+  # fsdp_auto_wrap_policy: "TRANSFORMER_BASED_WRAP"
+  # fsdp_cpu_offload: false                       # 显存不足时设为 true
+  # fsdp_activation_checkpointing: true
+
+  # ---- DeepSpeed ZeRO 配置（当 strategy=deepspeed 时启用）----
+  # deepspeed_stage: 2                            # ZeRO-2: 优化器状态+梯度分片
+  # deepspeed_offload_optimizer: false            # 设为 true 可将优化器状态卸载到 CPU
+  # deepspeed_offload_param: false                # ZeRO-3 时可将参数卸载到 CPU
+
+  # ---- 流水线/张量并行（实验性）----
+  # pipeline_parallel_size: 1
+  # tensor_parallel_size: 1

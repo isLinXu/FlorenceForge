@@ -12,6 +12,7 @@ import torch.quantization as quant
 from typing import Union, Optional, Callable, List, Dict, Any
 import logging
 import copy
+import numpy as np
 
 logger = logging.getLogger(__name__)
 

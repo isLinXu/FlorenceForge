@@ -4,12 +4,15 @@
 """
 
 import json
+import logging
 import pickle
 import shutil
 import yaml
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Union, List, Optional
+
+logger = logging.getLogger(__name__)
 
 def ensure_dir(path: Union[str, Path]) -> Path:
     """确保目录存在
@@ -109,20 +112,31 @@ def save_pickle(data: Any, file_path: Union[str, Path]) -> None:
     with open(file_path, 'wb') as f:
         pickle.dump(data, f)
 
-def load_pickle(file_path: Union[str, Path]) -> Any:
+def load_pickle(file_path: Union[str, Path], trusted: bool = False) -> Any:
     """从Pickle文件加载数据
-    
+
+    安全警告：``pickle.load`` 会在反序列化时执行任意代码，绝不要加载来源不可信的
+    pickle 文件。仅当你确认文件来自可信来源时，传入 ``trusted=True`` 以抑制告警。
+
     Args:
         file_path: 文件路径
-        
+        trusted: 是否确认文件来源可信（仅用于抑制安全告警，不改变加载行为）
+
     Returns:
         加载的数据
     """
     file_path = Path(file_path)
-    
+
     if not file_path.exists():
         raise FileNotFoundError(f"Pickle文件不存在: {file_path}")
-    
+
+    if not trusted:
+        logger.warning(
+            "正在通过 pickle.load 反序列化 %s；pickle 会执行任意代码，"
+            "只应加载可信来源的文件。确认可信后可传入 trusted=True 抑制此告警。",
+            file_path,
+        )
+
     with open(file_path, 'rb') as f:
         return pickle.load(f)
 
