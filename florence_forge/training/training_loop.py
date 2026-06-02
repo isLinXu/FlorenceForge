@@ -1,0 +1,459 @@
+"""训练循环核心逻辑（v2）
+
+⚠️ 这是 v2 训练栈的组件，由 `trainer_refactored.MultiTaskTrainer` 使用。
+v1（`trainer.py`）有自己的内联循环，不依赖本文件。
+
+提供训练和验证的核心循环逻辑
+"""
+import logging
+import time
+from typing import Dict, Any, Optional, Tuple
+from collections import defaultdict
+
+import torch
+import torch.nn as nn
+from torch.utils.data import DataLoader
+from tqdm.auto import tqdm
+
+from ..core.config import TrainingConfig
+from ..utils.training_logging import (
+    format_training_step,
+    resolve_total_steps,
+    should_log_step,
+)
+
+logger = logging.getLogger(__name__)
+
+
+class TrainingLoop:
+    """训练循环管理器
+    
+    封装训练和验证的核心循环逻辑
+    """
+    
+    def __init__(
+        self,
+        model: nn.Module,
+        config: TrainingConfig,
+        accelerator=None,
+        callback_manager=None
+    ):
+        """初始化训练循环
+        
+        Args:
+            model: 训练模型
+            config: 训练配置
+            accelerator: Accelerate 加速器
+            callback_manager: 回调管理器
+        """
+        self.model = model
+        self.config = config
+        self.accelerator = accelerator
+        self.callback_manager = callback_manager
+        
+        # 训练状态
+        self.global_step = 0
+        self.best_metric = float('inf')
+        self.patience_counter = 0
+        self._train_start_time: Optional[float] = None
+    
+    def train_epoch(
+        self,
+        train_dataloader: DataLoader,
+        optimizer: torch.optim.Optimizer,
+        lr_scheduler,
+        epoch: int,
+        gradient_validator=None,
+        memory_monitor=None
+    ) -> Dict[str, float]:
+        """训练一个 epoch
+        
+        Args:
+            train_dataloader: 训练数据加载器
+            optimizer: 优化器
+            lr_scheduler: 学习率调度器
+            epoch: 当前 epoch 编号
+            gradient_validator: 梯度验证器（可选）
+            memory_monitor: 内存监控器（可选）
+        
+        Returns:
+            训练指标字典
+        """
+        self.model.train()
+        if self._train_start_time is None:
+            self._train_start_time = time.perf_counter()
+        
+        # 指标统计
+        epoch_loss = 0.0
+        task_losses = defaultdict(float)
+        task_samples = defaultdict(int)
+        batch_count = 0
+        total_steps = resolve_total_steps(
+            train_dataloader,
+            self.config.num_epochs,
+            getattr(self.config, "max_steps", None),
+        )
+        
+        # 进度条
+        progress_bar = tqdm(
+            train_dataloader,
+            desc=f"Epoch {epoch + 1}/{self.config.num_epochs}",
+            disable=not self.accelerator.is_local_main_process if self.accelerator else False
+        )
+        
+        # 触发 epoch 开始回调
+        if self.callback_manager:
+            self.callback_manager.on_epoch_begin(epoch, mode='train')
+        
+        for batch_idx, batch in enumerate(progress_bar):
+            if batch is None or (isinstance(batch, dict) and batch.get("is_empty", False)):
+                continue
+            step_start_time = time.perf_counter()
+
+            # 触发 batch 开始回调
+            if self.callback_manager:
+                self.callback_manager.on_batch_begin(batch_idx, batch)
+            
+            # 前向传播
+            batch = self._move_batch_to_device(batch)
+            model_inputs = self._prepare_model_inputs(batch)
+            labels = model_inputs.get("labels")
+            if labels is None:
+                logger.warning("Batch %s has no labels; skipping training step", batch_idx)
+                optimizer.zero_grad()
+                continue
+
+            accelerator_handles_accumulation = self._accelerator_handles_accumulation()
+            
+            with self.accelerator.accumulate(self.model) if self.accelerator else torch.enable_grad():
+                outputs = self.model(**model_inputs)
+                loss = outputs.loss if hasattr(outputs, 'loss') else outputs['loss']
+                
+                # 原生 PyTorch 路径需要手动缩放；Accelerate 会在 backward 中处理。
+                if not accelerator_handles_accumulation and self.config.gradient_accumulation_steps > 1:
+                    loss = loss / self.config.gradient_accumulation_steps
+                
+                # 反向传播
+                if self.accelerator:
+                    self.accelerator.backward(loss)
+                else:
+                    loss.backward()
+                
+                # 梯度验证（调试用）
+                gradient_valid = True
+                if gradient_validator and batch_idx % 10 == 0:
+                    try:
+                        if hasattr(gradient_validator, "validate_gradients"):
+                            gradient_valid, _ = gradient_validator.validate_gradients(self.global_step)
+                        elif hasattr(gradient_validator, "check_gradients"):
+                            result = gradient_validator.check_gradients(self.model, self.global_step)
+                            if isinstance(result, bool):
+                                gradient_valid = result
+                        if not gradient_valid:
+                            logger.warning("Step %s gradient validation failed; skipping optimizer step", self.global_step)
+                    except Exception as exc:
+                        logger.error("Gradient validation failed at step %s: %s", self.global_step, exc)
+                
+                # 梯度裁剪和优化器步进
+                should_step = (
+                    self.accelerator.sync_gradients
+                    if accelerator_handles_accumulation
+                    else (batch_idx + 1) % self.config.gradient_accumulation_steps == 0
+                )
+                if not gradient_valid:
+                    optimizer.zero_grad()
+                elif should_step:
+                    if self.config.max_grad_norm > 0:
+                        if self.accelerator:
+                            self.accelerator.clip_grad_norm_(
+                                self.model.parameters(),
+                                self.config.max_grad_norm
+                            )
+                        else:
+                            torch.nn.utils.clip_grad_norm_(
+                                self.model.parameters(),
+                                self.config.max_grad_norm
+                            )
+                    
+                    optimizer.step()
+                    if lr_scheduler is not None:
+                        lr_scheduler.step()
+                    optimizer.zero_grad()
+            
+            # 统计指标
+            actual_loss = (
+                loss.item()
+                if accelerator_handles_accumulation
+                else loss.item() * self.config.gradient_accumulation_steps
+            )
+            epoch_loss += actual_loss
+            batch_count += 1
+            
+            # 任务级别统计
+            task_type, sample_count = self._get_task_type_and_count(batch)
+            if task_type is not None:
+                task_losses[task_type] += actual_loss
+                task_samples[task_type] += sample_count
+
+            current_lr = self._get_current_lr(lr_scheduler)
+            step_time = time.perf_counter() - step_start_time
+            completed_step = self.global_step + 1
+            can_log = self.accelerator is None or self.accelerator.is_local_main_process
+            if can_log and should_log_step(
+                completed_step,
+                self.config.logging_steps,
+                total_steps,
+            ):
+                logger.info(
+                    format_training_step(
+                        completed_step=completed_step,
+                        total_steps=total_steps,
+                        epoch=epoch + 1,
+                        total_epochs=self.config.num_epochs,
+                        metrics={
+                            "loss": actual_loss,
+                            "learning_rate": current_lr,
+                            "time_per_step": step_time,
+                        },
+                        task_type=task_type,
+                        elapsed_seconds=time.perf_counter() - self._train_start_time,
+                    )
+                )
+            
+            # 更新进度条
+            progress_bar.set_postfix({
+                'loss': f"{actual_loss:.4f}",
+                'lr': f"{current_lr:.2e}",
+                'step_s': f"{step_time:.2f}",
+            })
+            
+            # 触发 batch 结束回调
+            if self.callback_manager:
+                step_metrics = {
+                    'loss': actual_loss,
+                    'learning_rate': current_lr,
+                    'global_step': self.global_step
+                }
+                self.callback_manager.on_batch_end(batch_idx, step_metrics)
+            
+            self.global_step += 1
+            
+            # 内存监控
+            if memory_monitor and batch_idx % 100 == 0:
+                memory_monitor.check_memory(self.global_step)
+
+            # max_steps 硬上限：达到后立即终止当前 epoch
+            # （与 v1 trainer.py 行为对齐，max_steps 优先于 num_epochs）
+            if self._max_steps_reached():
+                logger.info(
+                    "🏁 已达到 max_steps=%s，提前结束当前 epoch",
+                    self.config.max_steps,
+                )
+                break
+        
+        # 计算平均指标
+        avg_loss = epoch_loss / batch_count if batch_count > 0 else 0.0
+        
+        # 任务级别平均损失
+        task_avg_losses = {
+            task: task_losses[task] / task_samples[task]
+            for task in task_losses if task_samples[task] > 0
+        }
+        
+        metrics = {
+            'loss': avg_loss,
+            'learning_rate': self._get_current_lr(lr_scheduler),
+            **{f'task_{task}_loss': loss for task, loss in task_avg_losses.items()}
+        }
+        
+        # 触发 epoch 结束回调
+        if self.callback_manager:
+            self.callback_manager.on_epoch_end(epoch, metrics, mode='train')
+        
+        return metrics
+    
+    def validate_epoch(
+        self,
+        val_dataloader: DataLoader,
+        epoch: int
+    ) -> Dict[str, float]:
+        """验证一个 epoch
+        
+        Args:
+            val_dataloader: 验证数据加载器
+            epoch: 当前 epoch 编号
+        
+        Returns:
+            验证指标字典
+        """
+        self.model.eval()
+        
+        # 指标统计
+        epoch_loss = 0.0
+        task_losses = defaultdict(float)
+        task_samples = defaultdict(int)
+        batch_count = 0
+        
+        # 进度条
+        progress_bar = tqdm(
+            val_dataloader,
+            desc=f"Validation Epoch {epoch}",
+            disable=not self.accelerator.is_local_main_process if self.accelerator else False
+        )
+        
+        # 触发验证开始回调
+        if self.callback_manager:
+            self.callback_manager.on_epoch_begin(epoch, mode='eval')
+        
+        with torch.no_grad():
+            for batch_idx, batch in enumerate(progress_bar):
+                if batch is None or (isinstance(batch, dict) and batch.get("is_empty", False)):
+                    continue
+
+                batch = self._move_batch_to_device(batch)
+                model_inputs = self._prepare_model_inputs(batch)
+                if model_inputs.get("labels") is None:
+                    logger.warning("Batch %s has no labels; skipping validation step", batch_idx)
+                    continue
+                
+                outputs = self.model(**model_inputs)
+                loss = outputs.loss if hasattr(outputs, 'loss') else outputs['loss']
+                
+                # 统计指标
+                actual_loss = loss.item()
+                epoch_loss += actual_loss
+                batch_count += 1
+                
+                # 任务级别统计
+                task_type, sample_count = self._get_task_type_and_count(batch)
+                if task_type is not None:
+                    task_losses[task_type] += actual_loss
+                    task_samples[task_type] += sample_count
+                
+                # 更新进度条
+                progress_bar.set_postfix({'val_loss': f"{actual_loss:.4f}"})
+        
+        # 计算平均指标
+        avg_loss = epoch_loss / batch_count if batch_count > 0 else 0.0
+        
+        # 任务级别平均损失
+        task_avg_losses = {
+            task: task_losses[task] / task_samples[task]
+            for task in task_losses if task_samples[task] > 0
+        }
+        
+        metrics = {
+            'val_loss': avg_loss,
+            **{f'val_task_{task}_loss': loss for task, loss in task_avg_losses.items()}
+        }
+        
+        # 触发验证结束回调
+        if self.callback_manager:
+            self.callback_manager.on_epoch_end(epoch, metrics, mode='eval')
+        
+        return metrics
+    
+    def _move_batch_to_device(self, batch: Dict[str, Any]) -> Dict[str, Any]:
+        """将 batch 移动到目标设备
+        
+        Args:
+            batch: 输入 batch
+        
+        Returns:
+            移动后的 batch
+        """
+        if self.accelerator is not None:
+            # accelerate 会自动处理设备转移
+            return batch
+        
+        device = next(self.model.parameters()).device
+        moved_batch = {}
+        for k, v in batch.items():
+            if isinstance(v, torch.Tensor):
+                moved_batch[k] = v.to(device)
+            else:
+                moved_batch[k] = v
+        return moved_batch
+
+    def _max_steps_reached(self) -> bool:
+        """Return True when a positive ``max_steps`` budget has been consumed."""
+        max_steps = getattr(self.config, "max_steps", None)
+        return bool(max_steps) and max_steps > 0 and self.global_step >= max_steps
+
+    def _accelerator_handles_accumulation(self) -> bool:
+        """Return True when using the real Accelerate implementation."""
+        if self.accelerator is None:
+            return False
+        return self.accelerator.__class__.__module__.startswith("accelerate")
+
+    def _prepare_model_inputs(self, batch: Dict[str, Any]) -> Dict[str, Any]:
+        """Strip dataloader metadata before calling the model."""
+        allowed_keys = {
+            "input_ids",
+            "pixel_values",
+            "attention_mask",
+            "labels",
+            "decoder_input_ids",
+            "decoder_attention_mask",
+            "position_ids",
+            "bbox",
+            "inputs_embeds",
+        }
+        return {
+            key: value
+            for key, value in batch.items()
+            if key in allowed_keys and value is not None
+        }
+
+    def _get_task_type_and_count(self, batch: Dict[str, Any]) -> Tuple[Optional[str], int]:
+        """Return representative task type and batch sample count."""
+        task_types = batch.get("task_types")
+        if task_types is None:
+            task_types = batch.get("task_type")
+
+        if isinstance(task_types, (list, tuple)):
+            task_type = task_types[0] if task_types else None
+            return task_type, len(task_types)
+
+        batch_size = 1
+        input_ids = batch.get("input_ids")
+        if isinstance(input_ids, torch.Tensor) and input_ids.dim() > 0:
+            batch_size = input_ids.shape[0]
+
+        if isinstance(task_types, str):
+            return task_types, batch_size
+        return None, batch_size
+
+    def _get_current_lr(self, lr_scheduler) -> float:
+        """Read the current learning rate from a scheduler if present."""
+        if lr_scheduler is None:
+            return 0.0
+        if hasattr(lr_scheduler, "get_last_lr"):
+            values = lr_scheduler.get_last_lr()
+            return float(values[0]) if values else 0.0
+        return 0.0
+    
+    def should_early_stop(
+        self,
+        current_metric: float,
+        patience: int
+    ) -> bool:
+        """判断是否应该早停
+        
+        Args:
+            current_metric: 当前监控指标
+            patience: 耐心值
+        
+        Returns:
+            是否应该早停
+        """
+        if current_metric < self.best_metric:
+            self.best_metric = current_metric
+            self.patience_counter = 0
+            return False
+        else:
+            self.patience_counter += 1
+            if self.patience_counter >= patience:
+                logger.info(f"🛑 早停触发：{patience} 个 epoch 无改善")
+                return True
+            return False

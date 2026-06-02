@@ -15,7 +15,8 @@ def setup_logging(
     log_format: Optional[str] = None,
     include_timestamp: bool = True,
     include_level: bool = True,
-    include_name: bool = True
+    include_name: bool = True,
+    force: bool = False
 ) -> None:
     """设置日志配置
     
@@ -26,6 +27,7 @@ def setup_logging(
         include_timestamp: 是否包含时间戳
         include_level: 是否包含日志级别
         include_name: 是否包含记录器名称
+        force: 是否强制清除现有处理器（默认 False，保留用户配置）
     """
     # 构建日志格式
     if log_format is None:
@@ -54,23 +56,38 @@ def setup_logging(
     root_logger = logging.getLogger()
     root_logger.setLevel(level)
     
-    # 清除现有处理器
-    for handler in root_logger.handlers[:]:
-        root_logger.removeHandler(handler)
+    # 清除现有处理器（仅当 force=True 时）
+    if force:
+        for handler in root_logger.handlers[:]:
+            root_logger.removeHandler(handler)
     
-    # 添加控制台处理器
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setFormatter(formatter)
-    root_logger.addHandler(console_handler)
+    # 检查是否已有控制台处理器
+    has_console_handler = any(
+        isinstance(h, logging.StreamHandler) and h.stream == sys.stdout
+        for h in root_logger.handlers
+    )
+    
+    # 添加控制台处理器（如果没有）
+    if not has_console_handler:
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setFormatter(formatter)
+        root_logger.addHandler(console_handler)
     
     # 添加文件处理器（如果指定）
     if log_file:
         log_file = Path(log_file)
         log_file.parent.mkdir(parents=True, exist_ok=True)
         
-        file_handler = logging.FileHandler(log_file, encoding='utf-8')
-        file_handler.setFormatter(formatter)
-        root_logger.addHandler(file_handler)
+        # 检查是否已有相同的文件处理器
+        has_file_handler = any(
+            isinstance(h, logging.FileHandler) and h.baseFilename == str(log_file)
+            for h in root_logger.handlers
+        )
+        
+        if not has_file_handler:
+            file_handler = logging.FileHandler(log_file, encoding='utf-8')
+            file_handler.setFormatter(formatter)
+            root_logger.addHandler(file_handler)
     
     # 设置第三方库的日志级别
     logging.getLogger('transformers').setLevel(logging.WARNING)
@@ -92,7 +109,8 @@ def get_logger(name: str) -> logging.Logger:
 def create_experiment_logger(
     experiment_name: str,
     log_dir: Union[str, Path],
-    level: Union[str, int] = logging.INFO
+    level: Union[str, int] = logging.INFO,
+    force: bool = False
 ) -> logging.Logger:
     """创建实验专用记录器
     
@@ -100,6 +118,7 @@ def create_experiment_logger(
         experiment_name: 实验名称
         log_dir: 日志目录
         level: 日志级别
+        force: 是否强制清除现有处理器（默认 False，保留已有配置）
         
     Returns:
         实验记录器
@@ -115,9 +134,10 @@ def create_experiment_logger(
     logger = logging.getLogger(f"experiment.{experiment_name}")
     logger.setLevel(level)
     
-    # 清除现有处理器
-    for handler in logger.handlers[:]:
-        logger.removeHandler(handler)
+    # 清除现有处理器（仅当 force=True 时）
+    if force:
+        for handler in logger.handlers[:]:
+            logger.removeHandler(handler)
     
     # 创建格式化器
     formatter = logging.Formatter(
@@ -125,15 +145,29 @@ def create_experiment_logger(
         datefmt='%Y-%m-%d %H:%M:%S'
     )
     
-    # 添加文件处理器
-    file_handler = logging.FileHandler(log_file, encoding='utf-8')
-    file_handler.setFormatter(formatter)
-    logger.addHandler(file_handler)
+    # 检查是否已有相同的文件处理器
+    has_file_handler = any(
+        isinstance(h, logging.FileHandler) and h.baseFilename == str(log_file)
+        for h in logger.handlers
+    )
     
-    # 添加控制台处理器
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setFormatter(formatter)
-    logger.addHandler(console_handler)
+    # 添加文件处理器（如果没有）
+    if not has_file_handler:
+        file_handler = logging.FileHandler(log_file, encoding='utf-8')
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
+    
+    # 检查是否已有控制台处理器
+    has_console_handler = any(
+        isinstance(h, logging.StreamHandler) and h.stream == sys.stdout
+        for h in logger.handlers
+    )
+    
+    # 添加控制台处理器（如果没有）
+    if not has_console_handler:
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setFormatter(formatter)
+        logger.addHandler(console_handler)
     
     logger.info(f"实验记录器已创建: {experiment_name}")
     logger.info(f"日志文件: {log_file}")

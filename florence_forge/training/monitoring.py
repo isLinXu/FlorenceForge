@@ -8,67 +8,54 @@ Florence Forge - 训练监控模块
 import os
 import logging
 from typing import Optional, Dict, Any, Union, List
-from dataclasses import dataclass, field
+from pydantic import BaseModel, Field
 from pathlib import Path
 import json
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class MonitoringConfig:
-    """监控配置类"""
-    
+class MonitoringConfig(BaseModel):
+    """监控配置类（Pydantic v2）
+
+    统一使用 Pydantic BaseModel 以与项目其他配置类保持一致，
+    支持 YAML/JSON 序列化、字段校验和 model_dump()。
+    """
+
     # 启用的监控工具
     enable_wandb: bool = False
     enable_swanlab: bool = False
     enable_tensorboard: bool = True
-    
+
     # WandB 配置
     wandb_project: Optional[str] = None
     wandb_entity: Optional[str] = None
     wandb_run_name: Optional[str] = None
-    wandb_tags: List[str] = field(default_factory=list)
+    wandb_tags: List[str] = Field(default_factory=list)
     wandb_notes: Optional[str] = None
-    wandb_config: Dict[str, Any] = field(default_factory=dict)
-    
+    wandb_config: Dict[str, Any] = Field(default_factory=dict)
+
     # SwanLab 配置
     swanlab_project: Optional[str] = None
     swanlab_experiment_name: Optional[str] = None
     swanlab_description: Optional[str] = None
-    swanlab_tags: List[str] = field(default_factory=list)
-    swanlab_config: Dict[str, Any] = field(default_factory=dict)
-    
+    swanlab_tags: List[str] = Field(default_factory=list)
+    swanlab_config: Dict[str, Any] = Field(default_factory=dict)
+
     # TensorBoard 配置
     tensorboard_log_dir: Optional[str] = None
-    
+
     # 通用配置
-    log_frequency: int = 10  # 每多少步记录一次
-    save_model_frequency: int = 500  # 每多少步保存一次模型
-    log_gradients: bool = False  # 是否记录梯度
-    log_model_architecture: bool = True  # 是否记录模型架构
-    
+    log_frequency: int = Field(default=10, ge=1, description="每多少步记录一次")
+    save_model_frequency: int = Field(default=500, ge=1, description="每多少步保存一次模型")
+    log_gradients: bool = False
+    log_model_architecture: bool = True
+
+    model_config = {"populate_by_name": True}
+
     def to_dict(self) -> Dict[str, Any]:
-        """转换为字典格式"""
-        return {
-            "enable_wandb": self.enable_wandb,
-            "enable_swanlab": self.enable_swanlab,
-            "enable_tensorboard": self.enable_tensorboard,
-            "wandb_project": self.wandb_project,
-            "wandb_entity": self.wandb_entity,
-            "wandb_run_name": self.wandb_run_name,
-            "wandb_tags": self.wandb_tags,
-            "wandb_notes": self.wandb_notes,
-            "swanlab_project": self.swanlab_project,
-            "swanlab_experiment_name": self.swanlab_experiment_name,
-            "swanlab_description": self.swanlab_description,
-            "swanlab_tags": self.swanlab_tags,
-            "tensorboard_log_dir": self.tensorboard_log_dir,
-            "log_frequency": self.log_frequency,
-            "save_model_frequency": self.save_model_frequency,
-            "log_gradients": self.log_gradients,
-            "log_model_architecture": self.log_model_architecture,
-        }
+        """转换为字典格式（使用 Pydantic 序列化）"""
+        return self.model_dump()
 
 
 class TrainingMonitor:

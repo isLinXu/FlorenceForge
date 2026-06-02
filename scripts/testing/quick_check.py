@@ -10,7 +10,8 @@ from pathlib import Path
 from typing import Dict, Any, List
 
 # 添加项目根目录到Python路径
-project_root = Path(__file__).parent.parent
+# 本脚本位于 scripts/testing/ 下，仓库根目录需向上回溯三层
+project_root = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(project_root))
 
 # 导入框架核心组件
@@ -150,10 +151,9 @@ class QuickChecker:
             import sys
             
             # 确保项目根目录在Python路径中
-            project_root = Path(__file__).parent.parent
-            parent_dir = project_root.parent
-            if str(parent_dir) not in sys.path:
-                sys.path.insert(0, str(parent_dir))
+            project_root = Path(__file__).resolve().parents[2]
+            if str(project_root) not in sys.path:
+                sys.path.insert(0, str(project_root))
             
             # 检查核心模块文件是否存在
             core_files = [
@@ -304,7 +304,7 @@ class QuickChecker:
             import sys
             
             # 检查TaskSample类定义是否存在于dataset.py文件中
-            dataset_file = Path(__file__).parent.parent / "florence_forge" / "data" / "dataset.py"
+            dataset_file = Path(__file__).resolve().parents[2] / "florence_forge" / "data" / "dataset.py"
             if not dataset_file.exists():
                 self.logger.error("dataset.py文件不存在")
                 return False
@@ -408,21 +408,28 @@ class QuickChecker:
     def check_directory_structure(self) -> bool:
         """检查目录结构"""
         try:
-            project_root = Path(__file__).parent.parent
-            required_dirs = [
+            project_root = Path(__file__).resolve().parents[2]
+            package_root = project_root / "florence_forge"
+
+            # florence_forge 包内的核心子目录
+            required_package_dirs = [
                 "core",
-                "data", 
+                "data",
                 "training",
                 "evaluation",
                 "utils",
-                "scripts"
             ]
-            
-            required_files = [
-                "__init__.py",
+
+            # 仓库根目录下的文件
+            required_repo_files = [
                 "setup.py",
                 "requirements.txt",
                 "README.md",
+            ]
+
+            # florence_forge 包内的核心文件
+            required_package_files = [
+                "__init__.py",
                 "core/__init__.py",
                 "core/config.py",
                 "core/model.py",
@@ -434,25 +441,37 @@ class QuickChecker:
                 "evaluation/evaluator.py",
                 "utils/__init__.py",
                 "utils/logging.py",
-                "scripts/__init__.py"
             ]
-            
-            # 检查目录
-            for dir_name in required_dirs:
-                dir_path = project_root / dir_name
+
+            # 检查仓库根下的 scripts 目录
+            scripts_dir = project_root / "scripts"
+            if not scripts_dir.exists() or not scripts_dir.is_dir():
+                self.logger.error("缺少目录: scripts")
+                return False
+
+            # 检查包内目录
+            for dir_name in required_package_dirs:
+                dir_path = package_root / dir_name
                 if not dir_path.exists() or not dir_path.is_dir():
-                    self.logger.error(f"缺少目录: {dir_name}")
+                    self.logger.error(f"缺少目录: florence_forge/{dir_name}")
                     return False
-            
-            # 检查文件
-            for file_name in required_files:
+
+            # 检查仓库根文件
+            for file_name in required_repo_files:
                 file_path = project_root / file_name
                 if not file_path.exists() or not file_path.is_file():
                     self.logger.error(f"缺少文件: {file_name}")
                     return False
-            
+
+            # 检查包内文件
+            for file_name in required_package_files:
+                file_path = package_root / file_name
+                if not file_path.exists() or not file_path.is_file():
+                    self.logger.error(f"缺少文件: florence_forge/{file_name}")
+                    return False
+
             return True
-            
+
         except Exception as e:
             self.logger.error(f"目录结构检查失败: {e}")
             return False

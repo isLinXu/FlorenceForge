@@ -4,6 +4,7 @@
 """
 
 import gc
+import math
 import psutil
 import torch
 import threading
@@ -11,6 +12,7 @@ import time
 import warnings
 from dataclasses import dataclass
 from contextlib import contextmanager
+from collections import deque
 from typing import List, Dict, Any, Union, Optional, Tuple
 from pathlib import Path
 
@@ -100,15 +102,28 @@ def clear_cache() -> None:
         torch.cuda.empty_cache()
         torch.cuda.synchronize()
 
+def clear_gpu_cache() -> None:
+    """清理GPU缓存
+    
+    专门用于清理GPU内存缓存的函数
+    """
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+        # 强制垃圾回收
+        gc.collect()
+
 def optimize_memory(
     aggressive: bool = False,
-    clear_gradients: bool = True
+    clear_gradients: bool = True,
+    model: Optional[torch.nn.Module] = None,
 ) -> Dict[str, float]:
     """优化内存使用
     
     Args:
         aggressive: 是否进行激进优化
         clear_gradients: 是否清理梯度
+        model: 可选模型；提供时仅遍历其参数释放梯度，避免全局对象扫描
         
     Returns:
         优化前后的内存使用情况
@@ -119,10 +134,13 @@ def optimize_memory(
     
     # 基础优化
     if clear_gradients:
-        # 清理所有张量的梯度
-        for obj in gc.get_objects():
-            if isinstance(obj, torch.Tensor) and obj.grad is not None:
-                obj.grad = None
+        if model is not None:
+            for param in model.parameters():
+                if param.grad is not None:
+                    param.grad = None
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
     
     # 清理缓存
     clear_cache()
@@ -208,8 +226,8 @@ class MemoryTracker:
             max_history: 最大历史记录数
         """
         self.interval = interval
-        self.max_history = max_history
-        self.history: List[Dict[str, Any]] = []
+        self.max_history = max(0, max_history)
+        self.history = deque(maxlen=self.max_history)
         self.is_tracking = False
         self.thread: Optional[threading.Thread] = None
     
@@ -256,10 +274,6 @@ class MemoryTracker:
                 ]
             
             self.history.append(record)
-            
-            # 限制历史记录数量
-            if len(self.history) > self.max_history:
-                self.history.pop(0)
             
             time.sleep(self.interval)
     
@@ -324,7 +338,7 @@ class MemoryTracker:
         file_path.parent.mkdir(parents=True, exist_ok=True)
         
         with open(file_path, 'w') as f:
-            json.dump(self.history, f, indent=2)
+            json.dump(list(self.history), f, indent=2)
 
 class MemoryPool:
     """内存池
@@ -402,7 +416,7 @@ class MemoryPool:
         total_memory = 0
         
         for (shape, dtype), pool in self.pools.items():
-            tensor_size = np.prod(shape) * torch.tensor([], dtype=dtype).element_size()
+            tensor_size = math.prod(shape) * torch.tensor([], dtype=dtype).element_size()
             total_memory += len(pool) * tensor_size
         
         return {

@@ -7,8 +7,11 @@ Florence Forge - LoRA管理器
 
 import logging
 import json
+import gc
+import weakref
 from typing import Optional, Dict, List, Tuple, Union, Any
 from pathlib import Path
+from contextlib import contextmanager
 
 try:
     import torch
@@ -26,6 +29,15 @@ except ImportError:
         raise ImportError("PEFT library not available")
 
 from ..core.config import LoRAConfig as ForgeLoRAConfig
+from ..utils.memory import get_memory_usage, clear_gpu_cache
+def _safe_mem_gpu(info) -> float:
+    """兼容 MemoryInfo / GPUMemoryInfo / dict 三种内存信息形式，返回 GPU allocated (bytes 或 GB)"""
+    if info is None:
+        return 0.0
+    if hasattr(info, 'get') and not hasattr(info, '__dataclass_fields__'):
+        return info.get('gpu_allocated', 0)
+    return float(getattr(info, 'allocated', getattr(info, 'used', 0.0)))
+
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +57,42 @@ class LoRAManager:
         self.task_configs: Dict[str, ForgeLoRAConfig] = {}
         self.active_adapters: Dict[str, str] = {}  # task -> adapter_name
         
+        # 内存管理和生命周期跟踪
+        self._model_refs: Dict[str, weakref.ref] = {}  # 弱引用跟踪模型
+        self._adapter_memory_usage: Dict[str, float] = {}  # 适配器内存使用量
+        self._max_adapters = 10  # 最大同时活跃适配器数量
+        self._memory_threshold_gb = 2.0  # 内存阈值(GB)
+        
         logger.info("LoRA管理器初始化完成")
+
+    def _resolve_peft_task_type(self, task_type: Any) -> Any:
+        """Convert configured task_type strings to PEFT TaskType members when available."""
+        if isinstance(task_type, str) and hasattr(TaskType, task_type):
+            return getattr(TaskType, task_type)
+        return task_type
+
+    def _is_forge_model_wrapper(self, model: nn.Module) -> bool:
+        """Detect FlorenceForge wrapper models without unwrapping arbitrary HF internals."""
+        return hasattr(model, "_backend") and hasattr(type(model), "model")
+
+    def _get_peft_target_model(self, model: nn.Module) -> nn.Module:
+        """Return the concrete HF/PEFT model that PEFT methods should operate on."""
+        if self._is_forge_model_wrapper(model):
+            target = getattr(model, "model", None)
+            if isinstance(target, nn.Module):
+                return target
+        return model
+
+    def _attach_peft_model(self, original_model: nn.Module, peft_model: nn.Module) -> nn.Module:
+        """Put a PEFT model back into a FlorenceForge wrapper when one was supplied."""
+        if self._is_forge_model_wrapper(original_model):
+            model_property = getattr(type(original_model), "model", None)
+            if isinstance(model_property, property) and model_property.fset is not None:
+                model_property.fset(original_model, peft_model)
+            else:
+                setattr(original_model, "model", peft_model)
+            return original_model
+        return peft_model
     
     def create_task_config(
         self,
@@ -162,7 +209,7 @@ class LoRAManager:
             target_modules=forge_config.target_modules,
             lora_dropout=forge_config.lora_dropout,
             bias=forge_config.bias,
-            task_type=TaskType.CAUSAL_LM
+            task_type=self._resolve_peft_task_type(forge_config.task_type)
         )
     
     def apply_lora_to_model(
@@ -184,13 +231,32 @@ class LoRAManager:
         if adapter_name is None:
             adapter_name = f"lora_{task_name}"
         
+        # 检查内存使用情况
+        self._auto_cleanup_if_needed()
+        
         peft_config = self.create_peft_config(task_name)
         
         try:
-            self.active_adapters[task_name] = adapter_name
+            # 记录应用前的内存状态
+            memory_before = get_memory_usage()
             
-            logger.info(f"LoRA已应用到模型，任务: {task_name}, 适配器: {adapter_name}")
-            return peft_model
+            # 使用底层 HF 模型创建 PEFT 模型；FlorenceForge wrapper 本身不一定实现
+            # PEFT 所需的 generation 私有接口。
+            target_model = self._get_peft_target_model(model)
+            peft_model = get_peft_model(target_model, peft_config, adapter_name=adapter_name)
+            return_model = self._attach_peft_model(model, peft_model)
+            
+            # 记录内存使用
+            memory_after = get_memory_usage()
+            memory_diff = _safe_mem_gpu(memory_after) - _safe_mem_gpu(memory_before)
+            self._adapter_memory_usage[adapter_name] = memory_diff / (1024**3)  # 转换为GB
+            
+            # 记录活跃适配器和模型弱引用
+            self.active_adapters[task_name] = adapter_name
+            self._model_refs[adapter_name] = weakref.ref(peft_model)
+            
+            logger.info(f"LoRA已应用到模型，任务: {task_name}, 适配器: {adapter_name}, 内存增加: {self._adapter_memory_usage[adapter_name]:.3f}GB")
+            return return_model
         
         except Exception as e:
             logger.error(f"应用LoRA失败: {e}")
@@ -212,12 +278,29 @@ class LoRAManager:
         if adapter_name is None:
             adapter_name = f"lora_{task_name}"
         
+        # 检查内存使用情况
+        self._auto_cleanup_if_needed()
+        
         peft_config = self.create_peft_config(task_name)
         
         try:
-            self.active_adapters[task_name] = adapter_name
+            # 记录添加前的内存状态
+            memory_before = get_memory_usage()
             
-            logger.info(f"新适配器已添加，任务: {task_name}, 适配器: {adapter_name}")
+            # 向PEFT模型添加新适配器
+            peft_model = self._get_peft_target_model(model)
+            peft_model.add_adapter(adapter_name, peft_config)
+            
+            # 记录内存使用
+            memory_after = get_memory_usage()
+            memory_diff = _safe_mem_gpu(memory_after) - _safe_mem_gpu(memory_before)
+            self._adapter_memory_usage[adapter_name] = memory_diff / (1024**3)  # 转换为GB
+            
+            # 记录活跃适配器和模型弱引用
+            self.active_adapters[task_name] = adapter_name
+            self._model_refs[adapter_name] = weakref.ref(peft_model)
+            
+            logger.info(f"新适配器已添加，任务: {task_name}, 适配器: {adapter_name}, 内存增加: {self._adapter_memory_usage[adapter_name]:.3f}GB")
         
         except Exception as e:
             logger.error(f"添加适配器失败: {e}")
@@ -236,7 +319,8 @@ class LoRAManager:
         adapter_name = self.active_adapters[task_name]
         
         try:
-            model.set_adapter(adapter_name)
+            peft_model = self._get_peft_target_model(model)
+            peft_model.set_adapter(adapter_name)
             logger.debug(f"已切换到适配器: {adapter_name} (任务: {task_name})")
         
         except Exception as e:
@@ -255,7 +339,9 @@ class LoRAManager:
         trainable_params = 0
         total_params = 0
         
-        for param in model.parameters():
+        peft_model = self._get_peft_target_model(model)
+
+        for param in peft_model.parameters():
             total_params += param.numel()
             if param.requires_grad:
                 trainable_params += param.numel()
@@ -297,10 +383,12 @@ class LoRAManager:
         try:
             if adapter_name:
                 # 保存特定适配器
-                model.save_pretrained(save_path, selected_adapters=[adapter_name])
+                peft_model = self._get_peft_target_model(model)
+                peft_model.save_pretrained(save_path, selected_adapters=[adapter_name])
             else:
                 # 保存所有适配器
-                model.save_pretrained(save_path)
+                peft_model = self._get_peft_target_model(model)
+                peft_model.save_pretrained(save_path)
             
             # 保存管理器状态
             self.save_manager_state(save_path / "lora_manager_state.json")
@@ -331,7 +419,9 @@ class LoRAManager:
         
         try:
             # 加载PEFT模型
-            peft_model = PeftModel.from_pretrained(model, load_path, adapter_name=adapter_name)
+            target_model = self._get_peft_target_model(model)
+            peft_model = PeftModel.from_pretrained(target_model, load_path, adapter_name=adapter_name)
+            return_model = self._attach_peft_model(model, peft_model)
             
             # 加载管理器状态
             manager_state_path = load_path / "lora_manager_state.json"
@@ -339,7 +429,7 @@ class LoRAManager:
                 self.load_manager_state(manager_state_path)
             
             logger.info(f"适配器已从 {load_path} 加载")
-            return peft_model
+            return return_model
         
         except Exception as e:
             logger.error(f"加载适配器失败: {e}")
@@ -449,4 +539,134 @@ class LoRAManager:
         """清空所有配置"""
         self.task_configs.clear()
         self.active_adapters.clear()
+        self._cleanup_memory()
         logger.info("所有LoRA配置已清空")
+    
+    def _cleanup_memory(self) -> None:
+        """清理内存和GPU缓存"""
+        # 清理弱引用
+        dead_refs = [key for key, ref in self._model_refs.items() if ref() is None]
+        for key in dead_refs:
+            del self._model_refs[key]
+            if key in self._adapter_memory_usage:
+                del self._adapter_memory_usage[key]
+        
+        # 强制垃圾回收
+        gc.collect()
+        
+        # 清理GPU缓存
+        if torch.cuda.is_available():
+            clear_gpu_cache()
+        
+        logger.debug(f"内存清理完成，移除了 {len(dead_refs)} 个无效引用")
+    
+    def _check_memory_usage(self) -> bool:
+        """检查内存使用情况
+        
+        Returns:
+            是否需要清理内存
+        """
+        current_memory = get_memory_usage()
+        
+        # 检查GPU内存使用
+        if torch.cuda.is_available():
+            gpu_memory_gb = torch.cuda.memory_allocated() / (1024**3)
+            if gpu_memory_gb > self._memory_threshold_gb:
+                logger.warning(f"GPU内存使用过高: {gpu_memory_gb:.2f}GB > {self._memory_threshold_gb}GB")
+                return True
+        
+        # 检查适配器数量
+        if len(self.active_adapters) > self._max_adapters:
+            logger.warning(f"活跃适配器数量过多: {len(self.active_adapters)} > {self._max_adapters}")
+            return True
+        
+        return False
+    
+    def _auto_cleanup_if_needed(self) -> None:
+        """根据需要自动清理内存"""
+        if self._check_memory_usage():
+            logger.info("触发自动内存清理")
+            self._cleanup_memory()
+    
+    @contextmanager
+    def managed_adapter(self, model: PeftModel, task_name: str):
+        """适配器上下文管理器，确保正确的生命周期管理
+        
+        Args:
+            model: PEFT模型
+            task_name: 任务名称
+        """
+        adapter_name = self.active_adapters.get(task_name)
+        if not adapter_name:
+            raise ValueError(f"任务 {task_name} 没有对应的适配器")
+        
+        # 记录内存使用前的状态
+        memory_before = get_memory_usage()
+        
+        try:
+            # 切换到指定适配器
+            self.switch_adapter(model, task_name)
+            
+            # 记录内存使用
+            memory_after = get_memory_usage()
+            memory_diff = _safe_mem_gpu(memory_after) - _safe_mem_gpu(memory_before)
+            self._adapter_memory_usage[adapter_name] = memory_diff / (1024**3)  # 转换为GB
+            
+            yield model
+        
+        finally:
+            # 检查是否需要清理
+            self._auto_cleanup_if_needed()
+    
+    def remove_adapter(self, model: PeftModel, task_name: str) -> None:
+        """安全移除适配器
+        
+        Args:
+            model: PEFT模型
+            task_name: 任务名称
+        """
+        if task_name not in self.active_adapters:
+            logger.warning(f"任务 {task_name} 没有活跃的适配器")
+            return
+        
+        adapter_name = self.active_adapters[task_name]
+        
+        try:
+            # 从模型中删除适配器
+            if hasattr(model, 'delete_adapter'):
+                model.delete_adapter(adapter_name)
+            
+            # 清理记录
+            del self.active_adapters[task_name]
+            if adapter_name in self._adapter_memory_usage:
+                del self._adapter_memory_usage[adapter_name]
+            
+            # 清理内存
+            self._cleanup_memory()
+            
+            logger.info(f"适配器已移除: {adapter_name} (任务: {task_name})")
+        
+        except Exception as e:
+            logger.error(f"移除适配器失败: {e}")
+            raise
+    
+    def get_memory_stats(self) -> Dict[str, Any]:
+        """获取内存使用统计
+        
+        Returns:
+            内存统计信息
+        """
+        stats = {
+            'active_adapters_count': len(self.active_adapters),
+            'max_adapters': self._max_adapters,
+            'memory_threshold_gb': self._memory_threshold_gb,
+            'adapter_memory_usage': self._adapter_memory_usage.copy(),
+            'total_adapter_memory_gb': sum(self._adapter_memory_usage.values()),
+            'system_memory': get_memory_usage()
+        }
+        
+        if torch.cuda.is_available():
+            stats['gpu_memory_allocated_gb'] = torch.cuda.memory_allocated() / (1024**3)
+            stats['gpu_memory_reserved_gb'] = torch.cuda.memory_reserved() / (1024**3)
+        
+        return stats

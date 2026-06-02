@@ -9,11 +9,15 @@ Florence Forge 部署模块
 from .exporter import ModelExporter
 from .optimizer import ModelOptimizer
 from .inference import InferenceEngine
+from .backends import InferenceBackend, NativeInferenceBackend, VLLMInferenceBackend
 from .server import ModelServer
 
 __all__ = [
     "ModelExporter",
     "ModelOptimizer", 
     "InferenceEngine",
+    "InferenceBackend",
+    "NativeInferenceBackend",
+    "VLLMInferenceBackend",
     "ModelServer"
 ]

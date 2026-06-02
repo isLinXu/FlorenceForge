@@ -14,21 +14,40 @@ import io
 from typing import Union, List, Dict, Any, Optional
 from pathlib import Path
 
+from ..utils.optional_dependencies import missing_dependency_message
+
 try:
-    from fastapi import FastAPI, HTTPException
+    from fastapi import FastAPI, HTTPException, UploadFile, File
     from fastapi.middleware.cors import CORSMiddleware
     import uvicorn
     FASTAPI_AVAILABLE = True
+    try:
+        import python_multipart  # noqa: F401
+        MULTIPART_AVAILABLE = True
+    except ImportError:
+        try:
+            import multipart  # noqa: F401
+            MULTIPART_AVAILABLE = True
+        except ImportError:
+            MULTIPART_AVAILABLE = False
 except ImportError as e:
     FASTAPI_AVAILABLE = False
-    logger.warning(f"FastAPI不可用: {e}")
+    MULTIPART_AVAILABLE = False
+    # 延迟设置 logger，因为此时 logger 可能还未定义
+    import logging as _logging
+    _logging.getLogger(__name__).warning(
+        f"{missing_dependency_message('FastAPI服务', 'fastapi 和 uvicorn')} ({e})"
+    )
 
 try:
     from pydantic import BaseModel
     PYDANTIC_AVAILABLE = True
 except ImportError as e:
     PYDANTIC_AVAILABLE = False
-    logger.warning(f"Pydantic不可用: {e}")
+    import logging as _logging
+    _logging.getLogger(__name__).warning(
+        f"{missing_dependency_message('服务请求模型', 'pydantic>=2.4.0')} ({e})"
+    )
     # 如果pydantic不可用，创建一个占位符BaseModel
     class BaseModel:
         def __init__(self, **kwargs):
@@ -41,7 +60,10 @@ try:
 except ImportError:
     PIL_AVAILABLE = False
 
+import numpy as np
+
 import torch
+from .backends import InferenceBackend, NativeInferenceBackend, VLLMInferenceBackend
 from .inference import InferenceEngine
 
 logger = logging.getLogger(__name__)
@@ -88,8 +110,8 @@ class ModelServer:
     
     def __init__(
         self,
-        inference_engine: InferenceEngine,
-        host: str = "0.0.0.0",
+        inference_engine: Union[InferenceEngine, InferenceBackend],
+        host: str = "127.0.0.1",
         port: int = 8000,
         title: str = "Florence Forge Model Server",
         description: str = "Florence-2 模型推理服务",
@@ -98,7 +120,7 @@ class ModelServer:
         """初始化模型服务器
         
         Args:
-            inference_engine: 推理引擎
+            inference_engine: 推理引擎或部署后端
             host: 服务器主机
             port: 服务器端口
             title: API标题
@@ -106,12 +128,21 @@ class ModelServer:
             version: API版本
         """
         if not FASTAPI_AVAILABLE:
-            raise ImportError("需要安装FastAPI: pip install fastapi uvicorn")
+            raise ImportError(
+                missing_dependency_message("FastAPI服务", "fastapi 和 uvicorn")
+            )
         
         if not PYDANTIC_AVAILABLE:
-            raise ImportError("需要安装Pydantic: pip install pydantic>=2.4.0")
+            raise ImportError(
+                missing_dependency_message("服务请求模型", "pydantic>=2.4.0")
+            )
         
-        self.inference_engine = inference_engine
+        if isinstance(inference_engine, InferenceBackend):
+            self.inference_backend = inference_engine
+            self.inference_engine = getattr(inference_engine, "engine", inference_engine)
+        else:
+            self.inference_engine = inference_engine
+            self.inference_backend = NativeInferenceBackend(inference_engine)
         self.host = host
         self.port = port
         
@@ -182,7 +213,7 @@ class ModelServer:
                 inputs = self._parse_input_data(request.data, request.format)
                 
                 # 执行推理
-                result = self.inference_engine.predict(
+                result = self.inference_backend.predict(
                     inputs, 
                     return_raw=request.return_raw
                 )
@@ -221,7 +252,7 @@ class ModelServer:
                 ]
                 
                 # 执行批量推理
-                results = self.inference_engine.predict_batch(
+                results = self.inference_backend.predict_batch(
                     inputs_list,
                     batch_size=request.batch_size
                 )
@@ -250,57 +281,67 @@ class ModelServer:
                 logger.error(f"批量预测失败: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
         
-        @self.app.post("/predict/upload")
-        async def predict_upload(file: UploadFile = File(...)):
-            """文件上传预测"""
-            start_time = time.time()
-            
-            try:
-                # 读取文件内容
-                contents = await file.read()
+        if MULTIPART_AVAILABLE:
+            @self.app.post("/predict/upload")
+            async def predict_upload(file: UploadFile = File(...)):
+                """文件上传预测"""
+                start_time = time.time()
                 
-                # 根据文件类型处理
-                if file.content_type.startswith('image/'):
-                    if not PIL_AVAILABLE:
+                try:
+                    # 读取文件内容
+                    contents = await file.read()
+                    content_type = file.content_type or ""
+                    
+                    # 根据文件类型处理
+                    if content_type.startswith('image/'):
+                        if not PIL_AVAILABLE:
+                            raise HTTPException(
+                                status_code=500, 
+                                detail="需要安装PIL库处理图像文件"
+                            )
+                        
+                        # 处理图像文件
+                        image = Image.open(io.BytesIO(contents))
+                        inputs = self._process_image(image)
+                        
+                    else:
                         raise HTTPException(
-                            status_code=500, 
-                            detail="需要安装PIL库处理图像文件"
+                            status_code=400, 
+                            detail=f"不支持的文件类型: {file.content_type}"
                         )
                     
-                    # 处理图像文件
-                    image = Image.open(io.BytesIO(contents))
-                    inputs = self._process_image(image)
+                    # 执行推理
+                    result = self.inference_backend.predict(inputs)
                     
-                else:
-                    raise HTTPException(
-                        status_code=400, 
-                        detail=f"不支持的文件类型: {file.content_type}"
-                    )
+                    # 转换结果
+                    serializable_result = self._make_serializable(result)
+                    
+                    inference_time = time.time() - start_time
+                    
+                    # 更新统计信息
+                    self._update_stats(inference_time, success=True)
+                    
+                    return {
+                        "success": True,
+                        "result": serializable_result,
+                        "inference_time": inference_time,
+                        "filename": file.filename
+                    }
                 
-                # 执行推理
-                result = self.inference_engine.predict(inputs)
-                
-                # 转换结果
-                serializable_result = self._make_serializable(result)
-                
-                inference_time = time.time() - start_time
-                
-                # 更新统计信息
-                self._update_stats(inference_time, success=True)
-                
-                return {
-                    "success": True,
-                    "result": serializable_result,
-                    "inference_time": inference_time,
-                    "filename": file.filename
-                }
-            
-            except Exception as e:
-                inference_time = time.time() - start_time
-                self._update_stats(inference_time, success=False)
-                
-                logger.error(f"文件上传预测失败: {e}")
-                raise HTTPException(status_code=500, detail=str(e))
+                except Exception as e:
+                    inference_time = time.time() - start_time
+                    self._update_stats(inference_time, success=False)
+                    
+                    logger.error(f"文件上传预测失败: {e}")
+                    raise HTTPException(status_code=500, detail=str(e))
+        else:
+            @self.app.post("/predict/upload")
+            async def predict_upload_unavailable():
+                """文件上传预测依赖缺失时的占位路由"""
+                raise HTTPException(
+                    status_code=503,
+                    detail=missing_dependency_message("文件上传预测", "python-multipart"),
+                )
         
         @self.app.get("/stats", response_model=ServerStats)
         async def get_stats():
@@ -329,7 +370,7 @@ class ModelServer:
         async def benchmark_model(input_shape: List[int], num_runs: int = 100):
             """模型性能基准测试"""
             try:
-                results = self.inference_engine.benchmark(
+                results = self.inference_backend.benchmark(
                     tuple(input_shape), 
                     num_runs=num_runs
                 )
@@ -427,6 +468,7 @@ class ModelServer:
         else:
             return obj
     
+    def _update_stats(self, inference_time: float, success: bool) -> None:
         """更新统计信息
         
         Args:
@@ -447,15 +489,7 @@ class ModelServer:
         Returns:
             模型信息字典
         """
-        engine_stats = self.inference_engine.get_stats()
-        
-        return {
-            "device": str(self.inference_engine.device),
-            "batch_size": self.inference_engine.batch_size,
-            "use_amp": self.inference_engine.use_amp,
-            "compile_model": self.inference_engine.compile_model,
-            "engine_stats": engine_stats
-        }
+        return self.inference_backend.get_model_info()
     
     def run(
         self,
@@ -527,9 +561,10 @@ class ModelServer:
 
 def create_server(
     model_path: Union[str, Path],
-    host: str = "0.0.0.0",
+    host: str = "127.0.0.1",
     port: int = 8000,
     device: str = "auto",
+    backend: str = "native",
     **engine_kwargs
 ) -> ModelServer:
     """创建模型服务器的便捷函数
@@ -539,21 +574,26 @@ def create_server(
         host: 服务器主机
         port: 服务器端口
         device: 设备类型
-        **engine_kwargs: 推理引擎其他参数
+        backend: 推理后端，支持 native 或 vllm
+        **engine_kwargs: 推理引擎其他参数，如 model_revision、batch_size、use_amp
         
     Returns:
         模型服务器实例
     """
-    # 创建推理引擎
-    inference_engine = InferenceEngine(
-        model=model_path,
-        device=device,
-        **engine_kwargs
-    )
+    if backend == "native":
+        inference_backend: Union[InferenceEngine, InferenceBackend] = InferenceEngine(
+            model=model_path,
+            device=device,
+            **engine_kwargs
+        )
+    elif backend == "vllm":
+        inference_backend = VLLMInferenceBackend(model=model_path, **engine_kwargs)
+    else:
+        raise ValueError(f"不支持的推理后端: {backend}")
     
     # 创建服务器
     server = ModelServer(
-        inference_engine=inference_engine,
+        inference_engine=inference_backend,
         host=host,
         port=port
     )
@@ -566,9 +606,18 @@ if __name__ == "__main__":
     
     parser = argparse.ArgumentParser(description="Florence Forge Model Server")
     parser.add_argument("--model", required=True, help="模型路径")
-    parser.add_argument("--host", default="0.0.0.0", help="服务器主机")
+    parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="服务器主机 (默认: 127.0.0.1，仅本机；对外暴露请显式指定 0.0.0.0)",
+    )
     parser.add_argument("--port", type=int, default=8000, help="服务器端口")
     parser.add_argument("--device", default="auto", help="设备类型")
+    parser.add_argument("--backend", default="native", choices=["native", "vllm"], help="推理后端")
+    parser.add_argument(
+        "--model-revision",
+        help="HuggingFace 模型/处理器 revision（建议生产环境使用具体 commit hash）",
+    )
     parser.add_argument("--batch-size", type=int, default=1, help="批处理大小")
     parser.add_argument("--use-amp", action="store_true", help="使用自动混合精度")
     parser.add_argument("--compile", action="store_true", help="编译模型")
@@ -581,6 +630,8 @@ if __name__ == "__main__":
         host=args.host,
         port=args.port,
         device=args.device,
+        backend=args.backend,
+        model_revision=args.model_revision,
         batch_size=args.batch_size,
         use_amp=args.use_amp,
         compile_model=args.compile

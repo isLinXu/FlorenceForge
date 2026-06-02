@@ -7,15 +7,34 @@ import sys
 import time
 import json
 import logging
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 # 添加项目根目录到Python路径
-project_root = Path(__file__).parent.parent
+# 本脚本位于 scripts/testing/ 下，仓库根目录需向上回溯三层
+project_root = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(project_root))
 
 try:
-    from florence_forge.core import TrainingConfig, ModelConfig
-    from florence_forge.training import MultiTaskTrainer
-    from florence_forge.data import MultiTaskDataset
+    from florence_forge.core.config import (
+        DataConfig,
+        LoRAConfig,
+        ModelConfig,
+        TrainingConfig,
+    )
+    from florence_forge.core.tasks import (
+        FLORENCE2_TASKS,
+        get_task_config,
+        validate_task_name,
+    )
+    from florence_forge.core.model import Florence2MultiTaskModel
+    from florence_forge.data.builder import DatasetBuilder
+    from florence_forge.data.dataset import MultiTaskDataset, TaskSample
+    from florence_forge.training.trainer import MultiTaskTrainer
+    from florence_forge.utils.device import get_device_info, get_optimal_device
+    from florence_forge.utils.logging import setup_logging
+    from florence_forge.utils.memory import clear_cache, get_memory_usage
 except ImportError as e:
     print(f"警告: 无法导入必要的依赖: {e}")
     print("请运行: pip install -r requirements.txt")
@@ -174,9 +193,9 @@ class ValidationSuite:
             for task in expected_tasks:
                 assert task in FLORENCE2_TASKS, f"缺少任务: {task}"
                 
-                # 验证任务配置
+                # 验证任务配置（FLORENCE2_TASKS 使用 prompt 字段）
                 task_config = get_task_config(task)
-                assert "prefix" in task_config
+                assert "prompt" in task_config
                 assert "description" in task_config
                 
                 # 验证任务名称验证函数
@@ -280,19 +299,20 @@ class ValidationSuite:
             # 获取设备信息
             device_info = get_device_info()
             assert isinstance(device_info, dict)
-            assert "device_type" in device_info
+            assert "cpu" in device_info
             
             # 获取最优设备
             optimal_device = get_optimal_device()
             assert optimal_device is not None
             
             # 检查CUDA可用性
-            cuda_available = check_cuda_availability()
+            import torch
+            cuda_available = torch.cuda.is_available()
             assert isinstance(cuda_available, bool)
             
             # 获取内存信息
-            memory_info = get_memory_info()
-            assert isinstance(memory_info, dict)
+            memory_info = get_memory_usage()
+            assert memory_info is not None
             
             # 清理缓存（应该不会抛出异常）
             clear_cache()

@@ -29,7 +29,7 @@ model_config:
   model_name: "microsoft/Florence-2-base"  # 使用base模型以节省资源
   trust_remote_code: true
   use_lora: true
-  
+
   # LoRA配置（轻量化微调）
   lora_config:
     r: 16                    # 较小的rank以节省资源
@@ -40,6 +40,12 @@ model_config:
     lora_dropout: 0.1
     bias: "none"
     task_type: "CAUSAL_LM"
+
+  # 显存优化：使用 auto 策略自动选择最佳重计算策略
+  gradient_checkpointing: true
+  activation_checkpointing_strategy: "auto"
+  checkpoint_target_layers: null
+  checkpoint_every_n_layers: null
 
 # 数据配置
 data_config:
@@ -64,3 +70,9 @@ task_scheduling_config:
   strategy: "round_robin"
   temperature: 1.0
   update_frequency: 50
+
+# 分布式训练配置（单卡训练时保持禁用）
+distributed_config:
+  enabled: false
+  strategy: "ddp"
+  backend: "nccl"
