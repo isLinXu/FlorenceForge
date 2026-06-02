@@ -6,13 +6,13 @@
 分派，但与 ``VLMBackendRegistry`` 形成了两套**功能高度重叠**的注册机制
 （详见 ``docs/Deep_Analysis_2026-05-28.md`` 的 P1-4）。
 
-当前职责（重构后，2026-05-29）
+当前职责（重构后，2026-06-02）
 -----------------------------
 ``ArchitectureResolver`` 现在是 ``VLMBackendRegistry`` 之上的一层薄壳，
 保持原有 API 兼容的同时让 **VLM 后端从单一来源派生**：
 
-* 注册的类若是 :class:`BaseVLMBackend` 子类 → 自动同步到 ``VLMBackendRegistry``
-  （单一事实源）；
+* 注册的类若是 :class:`BaseVLMBackend` 子类 → 只注册到 ``VLMBackendRegistry``
+  （单一事实源），本类不再复制保存 VLM 类；
 * 注册的类若不是 VLM 后端（例如测试 / 第三方扩展） → 仅保留在本类的局部表中；
 * ``resolve()`` 找不到本地条目时会回退到 ``VLMBackendRegistry``，
   让 ``florence-2`` / ``paligemma`` 等"原生"后端在不显式 import 路由器时也能解析；
@@ -22,12 +22,13 @@
 --------
 - ``register(name, cls)``、``register_builder(name, fn)``、``resolve(name, **kw)``、
   ``clear()``、``get_builder(name)`` 行为与旧版本完全一致。
-- 新增 ``list_backends()`` / ``sync_from_vlm_registry()`` 便于检视全局可用后端。
+- ``sync_from_vlm_registry()`` 保留为兼容 no-op；全局 VLM 注册表已可直接解析。
 """
 
 from __future__ import annotations
 
 import logging
+import warnings
 from typing import Any, Callable, Dict, List, Optional, Type
 
 logger = logging.getLogger(__name__)
@@ -56,7 +57,7 @@ class ArchitectureResolver:
         * 仍支持注册非 VLM 类或纯构建函数（向后兼容旧用法）。
     """
 
-    # 局部注册表：用于非 VLM 类、定制 builder、第三方扩展
+    # 局部注册表：仅用于非 VLM 类、定制 builder、第三方扩展
     _registry: Dict[str, Type[Any]] = {}
     _builders: Dict[str, Callable[..., Any]] = {}
 
@@ -68,22 +69,22 @@ class ArchitectureResolver:
     def register(cls, name: str, backend_class: Type[Any]) -> None:
         """注册一个后端类到路由表。
 
-        若 ``backend_class`` 是 :class:`BaseVLMBackend` 子类，会**同时**注册到
-        :class:`VLMBackendRegistry`，避免两套注册表数据不一致。
+        若 ``backend_class`` 是 :class:`BaseVLMBackend` 子类，会只注册到
+        :class:`VLMBackendRegistry`。这让 VLM 后端拥有唯一注册源，同时保留
+        本类对非 VLM 扩展和 builder 的兼容支持。
         """
-        cls._registry[name] = backend_class
-
         BaseVLMBackend, VLMBackendRegistry = _try_import_vlm_registry()
-        if BaseVLMBackend is None or VLMBackendRegistry is None:
-            return
-        try:
-            if isinstance(backend_class, type) and issubclass(backend_class, BaseVLMBackend):
-                if not VLMBackendRegistry.is_registered(name):
+        if BaseVLMBackend is not None and VLMBackendRegistry is not None:
+            try:
+                if isinstance(backend_class, type) and issubclass(backend_class, BaseVLMBackend):
                     VLMBackendRegistry.register(name, backend_class)
-                    logger.debug("同步注册 VLM 后端到 VLMBackendRegistry: %s", name)
-        except TypeError:
-            # backend_class 不是普通 class（例如 Mock），忽略同步
-            pass
+                    logger.debug("注册 VLM 后端到 VLMBackendRegistry: %s", name)
+                    return
+            except TypeError:
+                # backend_class 不是普通 class（例如 Mock），按非 VLM 扩展处理
+                pass
+
+        cls._registry[name] = backend_class
 
     @classmethod
     def register_builder(
@@ -102,8 +103,8 @@ class ArchitectureResolver:
 
         解析顺序：
             1. 本地 ``_registry`` + 可选 ``_builders`` 包装
-            2. 仅 ``_builders``（无对应类）
-            3. 回退到 ``VLMBackendRegistry``（全局 VLM 注册）
+            2. 回退到 ``VLMBackendRegistry``（全局 VLM 注册）
+            3. 仅 ``_builders``（无对应类）
 
         Raises:
             ValueError: 三处都找不到时抛出。
@@ -115,18 +116,21 @@ class ArchitectureResolver:
                 return builder(backend_cls, **kwargs)
             return backend_cls(**kwargs)
 
-        if name in cls._builders:
-            return cls._builders[name](**kwargs)
-
         _, VLMBackendRegistry = _try_import_vlm_registry()
         if VLMBackendRegistry is not None and VLMBackendRegistry.is_registered(name):
-            backend_cls = VLMBackendRegistry._backends[name.lower()]
+            backend_cls = VLMBackendRegistry.get_backend_class(name)
+            if name in cls._builders:
+                builder = cls._builders[name]
+                return builder(backend_cls, **kwargs)
             try:
                 return backend_cls(**kwargs)
             except TypeError:
                 # 多数 VLM 后端只接受一个 positional config
                 config = kwargs.get("config") or next(iter(kwargs.values()), None)
                 return backend_cls(config)
+
+        if name in cls._builders:
+            return cls._builders[name](**kwargs)
 
         available_local = sorted(set(cls._registry) | set(cls._builders))
         available_global: List[str] = []
@@ -167,17 +171,15 @@ class ArchitectureResolver:
 
     @classmethod
     def sync_from_vlm_registry(cls) -> int:
-        """将 :class:`VLMBackendRegistry` 中已注册但本地未登记的后端同步过来。
+        """兼容旧 API 的 no-op。
 
-        Returns:
-            同步条目数量。便于诊断脚本输出。
+        VLM 后端现在以 :class:`VLMBackendRegistry` 为唯一事实源，
+        ``ArchitectureResolver`` 不再复制全局 VLM 后端到本地注册表。
         """
-        _, VLMBackendRegistry = _try_import_vlm_registry()
-        if VLMBackendRegistry is None:
-            return 0
-        added = 0
-        for name in VLMBackendRegistry.list_backends():
-            if name not in cls._registry:
-                cls._registry[name] = VLMBackendRegistry._backends[name]
-                added += 1
-        return added
+        warnings.warn(
+            "ArchitectureResolver.sync_from_vlm_registry() 已不再需要；"
+            "VLM 后端会直接从 VLMBackendRegistry 解析。",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return 0

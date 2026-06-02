@@ -6,9 +6,10 @@
 
 - **v1（默认导出）**：`trainer.py` 单文件主流版 → `MultiTaskTrainer`
 - **v2（模块化）**：`trainer_refactored.py` + `training_loop.py` + `checkpoint_manager.py`
-  由 `tests/test_training_integration.py` 验证，未在此处默认导出，需要时显式导入：
+  由 `tests/test_training_integration.py` 验证，可通过 ``MultiTaskTrainerV2`` /
+  ``TrainerV2`` 显式导入：
 
-    >>> from florence_forge.training.trainer_refactored import MultiTaskTrainer as MultiTaskTrainerV2
+    >>> from florence_forge.training import MultiTaskTrainerV2
     >>> from florence_forge.training.training_loop import TrainingLoop
     >>> from florence_forge.training.checkpoint_manager import CheckpointManager
 
@@ -21,6 +22,8 @@ from importlib import import_module
 
 __all__ = [
     "MultiTaskTrainer",
+    "MultiTaskTrainerV2",
+    "TrainerV2",
     "TaskScheduler",
     "LoRAManager",
     "ModelMerger",
@@ -37,6 +40,8 @@ __all__ = [
 # v1 默认导出（main path）
 _LAZY_EXPORTS = {
     "MultiTaskTrainer": ("florence_forge.training.trainer", "MultiTaskTrainer"),
+    "MultiTaskTrainerV2": ("florence_forge.training.trainer_refactored", "MultiTaskTrainer"),
+    "TrainerV2": ("florence_forge.training.trainer_refactored", "MultiTaskTrainer"),
     "TaskScheduler": ("florence_forge.training.scheduler", "TaskScheduler"),
     "LoRAManager": ("florence_forge.training.lora_manager", "LoRAManager"),
     "ModelMerger": ("florence_forge.training.model_merger", "ModelMerger"),

@@ -24,6 +24,7 @@ import csv
 import time
 import logging
 import threading
+import warnings
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional, Dict, Any
 from pathlib import Path
@@ -59,6 +60,35 @@ from ..utils.training_logging import format_epoch_summary
 
 logger = logging.getLogger(__name__)
 
+
+_V1_TRAINER_WARNING_EMITTED = False
+_V1_WARNING_DISABLE_ENV = "FLORENCE_FORGE_DISABLE_V1_TRAINER_WARNING"
+
+
+def _env_flag_enabled(value: Optional[str]) -> bool:
+    return (value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _maybe_warn_v1_trainer_deprecated() -> None:
+    """Emit a soft one-time warning that new code should prefer the v2 trainer."""
+    global _V1_TRAINER_WARNING_EMITTED
+    if _V1_TRAINER_WARNING_EMITTED:
+        return
+    if _env_flag_enabled(os.environ.get(_V1_WARNING_DISABLE_ENV)):
+        return
+
+    warnings.warn(
+        "florence_forge.training.trainer.MultiTaskTrainer is the v1 training stack. "
+        "It remains the default for compatibility, but new integrations should "
+        "prefer florence_forge.training.MultiTaskTrainerV2 or "
+        "florence_forge.training.trainer_refactored.MultiTaskTrainer. "
+        f"Set {_V1_WARNING_DISABLE_ENV}=1 to silence this migration warning.",
+        DeprecationWarning,
+        stacklevel=3,
+    )
+    _V1_TRAINER_WARNING_EMITTED = True
+
+
 class MultiTaskTrainer(TrainerIOMixin):
     """多任务训练器
     
@@ -82,6 +112,8 @@ class MultiTaskTrainer(TrainerIOMixin):
             config: 训练配置
             accelerator: Accelerate加速器
         """
+        _maybe_warn_v1_trainer_deprecated()
+
         self.model = model
         self.train_dataset = train_dataset
         self.val_dataset = val_dataset

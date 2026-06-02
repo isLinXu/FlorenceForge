@@ -472,6 +472,12 @@ def create_parser() -> argparse.ArgumentParser:
         '--resume', '-r',
         help='从检查点恢复训练 (检查点目录路径)'
     )
+    train_parser.add_argument(
+        '--trainer-version',
+        choices=['v1', 'v2'],
+        default='v1',
+        help='训练器实现版本：v1 为兼容默认值，v2 为模块化重构版 (默认: v1)'
+    )
     
     # 列出任务命令
     subparsers.add_parser('list-tasks', help='列出所有可用任务')
@@ -635,8 +641,9 @@ def create_parser() -> argparse.ArgumentParser:
     )
     serve_parser.add_argument(
         '--host',
-        default='0.0.0.0',
-        help='服务器监听地址 (默认: 0.0.0.0)'
+        default='127.0.0.1',
+        help='服务器监听地址 (默认: 127.0.0.1，仅本机访问；'
+             '如需对外暴露请显式指定 0.0.0.0 并自行配置鉴权与网络边界)'
     )
     serve_parser.add_argument(
         '--port', '-p',
@@ -655,6 +662,10 @@ def create_parser() -> argparse.ArgumentParser:
         choices=['native', 'vllm'],
         default='native',
         help='推理后端 (默认: native)'
+    )
+    serve_parser.add_argument(
+        '--model-revision',
+        help='HuggingFace 模型/处理器 revision（建议生产环境使用具体 commit hash）'
     )
     serve_parser.add_argument(
         '--batch-size', '-b',
@@ -734,6 +745,8 @@ def main() -> None:
             overrides['device'] = args.device
         if hasattr(args, 'resume') and args.resume:
             overrides['resume'] = args.resume
+        if hasattr(args, 'trainer_version') and args.trainer_version:
+            overrides['trainer_version'] = args.trainer_version
         
         success = run_training_task(
             task=args.task,
