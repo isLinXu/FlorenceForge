@@ -130,11 +130,14 @@ class TrainerIOMixin:
         final_model_dir = self.output_dir / "final_model"
         final_model_dir.mkdir(parents=True, exist_ok=True)
 
-        # 保存模型
-        try:
-            self.accelerator.save_model(self.model, final_model_dir)
-        except Exception as e:
-            logger.error(f"保存最终模型失败: {e}")
+        # 保存完整模型。LoRA 大模型可通过配置跳过，避免把基础权重重复落盘。
+        if getattr(self.config, "save_full_model_on_end", True):
+            try:
+                self.accelerator.save_model(self.model, final_model_dir)
+            except Exception as e:
+                logger.error(f"保存最终模型失败: {e}")
+        else:
+            logger.info("已跳过完整模型保存（save_full_model_on_end=false）")
 
         # 保存LoRA适配器
         if self.lora_manager:
@@ -174,7 +177,7 @@ class TrainerIOMixin:
             except Exception as e:
                 logger.error(f"保存内存监控报告失败: {e}")
 
-        logger.info(f"最终模型已保存到: {final_model_dir}")
+        logger.info(f"最终训练产物已保存到: {final_model_dir}")
 
     def _save_config(self) -> None:
         """保存训练配置"""

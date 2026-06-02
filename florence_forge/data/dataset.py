@@ -501,6 +501,9 @@ class MultiTaskDataset(Dataset):
                     }
                     if attention_mask is not None:
                         result["attention_mask"] = attention_mask
+                    for extra_tensor_key in ("token_type_ids", "position_ids", "mm_token_type_ids"):
+                        if extra_tensor_key in full_processed:
+                            result[extra_tensor_key] = full_processed[extra_tensor_key]
                     backend_encode_succeeded = True
                 except AssertionError:
                     # 后端不能处理（例如 base 实现遇到 Florence-2 断言），回退到旧路径
@@ -594,6 +597,9 @@ class MultiTaskDataset(Dataset):
                 "weight": sample.weight,
                 "metadata": sample.metadata
             }
+            for extra_tensor_key in ("token_type_ids", "position_ids", "mm_token_type_ids"):
+                if extra_tensor_key in full_processed:
+                    result[extra_tensor_key] = full_processed[extra_tensor_key]
         else:
             # 如果没有处理器，保留原始格式
             result = {
