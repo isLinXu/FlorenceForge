@@ -83,6 +83,42 @@ class LoRAManager:
                 return target
         return model
 
+    def _is_peft_wrapped_model(self, model: nn.Module) -> bool:
+        """Return True when ``model`` already has PEFT adapter state."""
+        try:
+            if isinstance(model, PeftModel):
+                return True
+        except TypeError:
+            pass
+        return hasattr(model, "peft_config") and (
+            hasattr(model, "set_adapter") or hasattr(model, "add_adapter")
+        )
+
+    def _get_existing_adapter_name(
+        self,
+        peft_model: nn.Module,
+        fallback: str,
+    ) -> str:
+        """Best-effort adapter name for an already PEFT-wrapped model."""
+        active_adapter = getattr(peft_model, "active_adapter", None)
+        if callable(active_adapter):
+            try:
+                active_adapter = active_adapter()
+            except TypeError:
+                active_adapter = None
+        if isinstance(active_adapter, str) and active_adapter:
+            return active_adapter
+
+        active_adapters = getattr(peft_model, "active_adapters", None)
+        if isinstance(active_adapters, (list, tuple)) and active_adapters:
+            return str(active_adapters[0])
+
+        peft_config = getattr(peft_model, "peft_config", None)
+        if isinstance(peft_config, dict) and peft_config:
+            return str(next(iter(peft_config.keys())))
+
+        return fallback
+
     def _attach_peft_model(self, original_model: nn.Module, peft_model: nn.Module) -> nn.Module:
         """Put a PEFT model back into a FlorenceForge wrapper when one was supplied."""
         if self._is_forge_model_wrapper(original_model):
@@ -243,8 +279,20 @@ class LoRAManager:
             # 使用底层 HF 模型创建 PEFT 模型；FlorenceForge wrapper 本身不一定实现
             # PEFT 所需的 generation 私有接口。
             target_model = self._get_peft_target_model(model)
-            peft_model = get_peft_model(target_model, peft_config, adapter_name=adapter_name)
-            return_model = self._attach_peft_model(model, peft_model)
+            if self._is_peft_wrapped_model(target_model):
+                peft_model = target_model
+                adapter_name = self._get_existing_adapter_name(peft_model, adapter_name)
+                if hasattr(peft_model, "set_adapter"):
+                    peft_model.set_adapter(adapter_name)
+                return_model = model
+                logger.info(
+                    "模型已包含 PEFT adapter，复用适配器: %s (任务: %s)",
+                    adapter_name,
+                    task_name,
+                )
+            else:
+                peft_model = get_peft_model(target_model, peft_config, adapter_name=adapter_name)
+                return_model = self._attach_peft_model(model, peft_model)
             
             # 记录内存使用
             memory_after = get_memory_usage()

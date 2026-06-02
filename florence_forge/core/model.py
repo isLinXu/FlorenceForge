@@ -152,11 +152,12 @@ class Florence2MultiTaskModel(nn.Module):
 
     def forward(self, input_ids: torch.Tensor, pixel_values: torch.Tensor,
                 attention_mask: Optional[torch.Tensor] = None,
-                labels: Optional[torch.Tensor] = None) -> Dict[str, torch.Tensor]:
+                labels: Optional[torch.Tensor] = None,
+                **kwargs) -> Dict[str, torch.Tensor]:
         """前向传播（委托给后端）"""
         if self._backend is None:
             raise RuntimeError("后端未初始化，请检查配置")
-        return self._backend.forward(input_ids, pixel_values, attention_mask, labels)
+        return self._backend.forward(input_ids, pixel_values, attention_mask, labels, **kwargs)
 
     def generate(
         self,

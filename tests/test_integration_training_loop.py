@@ -187,6 +187,7 @@ class TestTrainingLoopIntegration:
             "attention_mask": torch.tensor([1, 1, 1, 1]),
             "pixel_values": torch.randn(3, 224, 224),
             "labels": torch.tensor([-100, -100, 5, 6]),
+            "token_type_ids": torch.tensor([0, 0, 1, 1]),
             "task_type": "CAPTION",
         }
         sample2 = {
@@ -194,6 +195,7 @@ class TestTrainingLoopIntegration:
             "attention_mask": torch.tensor([1, 1, 1]),
             "pixel_values": torch.randn(3, 224, 224),
             "labels": torch.tensor([-100, 7, 8]),
+            "token_type_ids": torch.tensor([0, 1, 1]),
             "task_type": "CAPTION",
         }
 
@@ -203,12 +205,14 @@ class TestTrainingLoopIntegration:
         assert batch["input_ids"].shape == (2, 4)  # batch_size=2, max_seq_len=4
         assert batch["attention_mask"].shape == (2, 4)
         assert batch["labels"].shape == (2, 4)
+        assert batch["token_type_ids"].shape == (2, 4)
         assert batch["pixel_values"].shape == (2, 3, 224, 224)
         assert batch["task_type"] == "CAPTION"
 
         # 验证 padding 正确
         assert batch["input_ids"][1, 3].item() == 0  # 第二个样本被 padding
         assert batch["labels"][1, 3].item() == -100  # labels 的 padding
+        assert batch["token_type_ids"][1, 3].item() == 0
 
     def test_dataset_getitem_with_encoding(self, mock_dataset):
         """验证 Dataset __getitem__ 返回正确结构"""

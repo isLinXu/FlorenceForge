@@ -41,18 +41,36 @@ class MockProcessor:
     """模拟 PaliGemma Processor"""
 
     def __init__(self):
-        pass
+        self.last_call = {}
 
     def __call__(self, text=None, images=None, return_tensors="pt", **kwargs):
         batch_size = len(text) if isinstance(text, list) else 1
-        return {
-            "input_ids": torch.randint(0, 100, (batch_size, 10)),
+        self.last_call = {
+            "text": text,
+            "images": images,
+            "return_tensors": return_tensors,
+            **kwargs,
+        }
+        input_ids = torch.arange(batch_size * 10, dtype=torch.long).reshape(batch_size, 10)
+        result = {
+            "input_ids": input_ids,
             "attention_mask": torch.ones(batch_size, 10),
             "pixel_values": torch.randn(batch_size, 3, 224, 224),
-            "token_type_ids": torch.zeros(batch_size, 10, dtype=torch.long),
         }
+        if "suffix" in kwargs:
+            token_type_ids = torch.zeros(batch_size, 10, dtype=torch.long)
+            token_type_ids[:, -3:] = 1
+            labels = input_ids.clone()
+            labels[token_type_ids == 0] = -100
+            result["token_type_ids"] = token_type_ids
+            result["labels"] = labels
+        return result
 
     def batch_decode(self, token_ids, skip_special_tokens=True):
+        if not skip_special_tokens:
+            return [
+                "<image><image><bos>\nmock paligemma output<eos><pad>"
+            ] * token_ids.shape[0]
         return ["mock paligemma output"] * token_ids.shape[0]
 
     def save_pretrained(self, path):
@@ -139,13 +157,54 @@ class TestPaliGemmaBackend:
         assert "input_ids" in inputs
         assert "pixel_values" in inputs
         assert "attention_mask" in inputs
-        assert "token_type_ids" in inputs
 
         # 解码
         token_ids = torch.randint(0, 100, (2, 10))
         texts = backend.decode(token_ids)
         assert len(texts) == 2
         assert texts[0] == "mock paligemma output"
+
+    def test_encode_with_task_uses_suffix_labels(self, mock_config):
+        """PaliGemma fine-tuning should use processor suffix labels."""
+        backend = _create_loaded_backend(mock_config)
+
+        inputs = backend.encode_with_task(
+            images=[MagicMock()],
+            task_name="OD",
+            text_input="<loc0000><loc1023> cat",
+        )
+
+        assert backend.processor.last_call["text"] == ["<image>detect"]
+        assert backend.processor.last_call["suffix"] == ["<loc0000><loc1023> cat"]
+        assert "labels" in inputs
+        assert "token_type_ids" in inputs
+
+        labels = backend.prepare_labels({}, inputs)
+        assert torch.all(labels[0, :-3] == -100)
+        assert torch.equal(labels[0, -3:], inputs["input_ids"][0, -3:])
+
+    def test_decode_cleans_display_special_tokens_when_raw_decode_requested(
+        self,
+        mock_config,
+    ):
+        """PaliGemma raw decode should not leak prompt wrapper tokens to users."""
+        backend = _create_loaded_backend(mock_config)
+
+        token_ids = torch.randint(0, 100, (1, 10))
+        texts = backend.decode(token_ids, skip_special_tokens=False)
+
+        assert texts == ["mock paligemma output"]
+
+    def test_decode_preserves_structured_location_tokens(self):
+        """Detection/segmentation style location tokens must remain visible."""
+        from florence_forge.core.backends.paligemma_backend import PaliGemmaBackend
+
+        text = "<image><bos><loc_0123><loc_0456><loc0001><loc1023> cat<eos>"
+
+        assert (
+            PaliGemmaBackend._clean_decoded_text(text)
+            == "<loc_0123><loc_0456><loc0001><loc1023> cat"
+        )
 
     def test_forward_pass(self, mock_config):
         """验证前向传播"""

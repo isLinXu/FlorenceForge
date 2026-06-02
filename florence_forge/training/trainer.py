@@ -991,6 +991,11 @@ class MultiTaskTrainer(TrainerIOMixin):
             pixel_values = batch_on_device["pixel_values"]
             attention_mask = batch_on_device.get("attention_mask")
             labels = batch_on_device.get("labels")
+            model_kwargs = {
+                key: batch_on_device[key]
+                for key in ("token_type_ids", "position_ids", "mm_token_type_ids")
+                if key in batch_on_device
+            }
 
             # 内存监控 - 每 N 步记录一次（减少开销）
             if self.global_step % self.memory_monitor.config.log_frequency == 0:
@@ -1013,7 +1018,8 @@ class MultiTaskTrainer(TrainerIOMixin):
                     input_ids=input_ids,
                     pixel_values=pixel_values,
                     attention_mask=attention_mask,
-                    labels=labels
+                    labels=labels,
+                    **model_kwargs,
                 )
 
                 loss = outputs.loss
@@ -1167,6 +1173,11 @@ class MultiTaskTrainer(TrainerIOMixin):
                 pixel_values = batch_on_device["pixel_values"]
                 attention_mask = batch_on_device.get("attention_mask")
                 labels = batch_on_device.get("labels")
+                model_kwargs = {
+                    key: batch_on_device[key]
+                    for key in ("token_type_ids", "position_ids", "mm_token_type_ids")
+                    if key in batch_on_device
+                }
 
                 # 验证时需要正确的labels，不能使用input_ids
                 if labels is not None:
@@ -1174,7 +1185,8 @@ class MultiTaskTrainer(TrainerIOMixin):
                         input_ids=input_ids,
                         pixel_values=pixel_values,
                         attention_mask=attention_mask,
-                        labels=labels
+                        labels=labels,
+                        **model_kwargs,
                     )
                     if hasattr(outputs, 'loss') and outputs.loss is not None:
                         loss = outputs.loss

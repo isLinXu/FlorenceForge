@@ -551,6 +551,10 @@ class TrainingConfig(WarnOnUnknownFieldsModel):
         default=True,
         description="训练结束报告是否在后台线程异步生成",
     )
+    save_full_model_on_end: bool = Field(
+        default=True,
+        description="训练结束时是否保存完整模型权重。LoRA/PEFT 大模型可设为 false，仅保存 adapter。",
+    )
 
     # ---------- 设备 ----------
     device: str = Field(default="auto")
