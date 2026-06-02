@@ -102,6 +102,43 @@ v1 当前仍是兼容默认值。若旧脚本需要临时静默 v1 迁移提示�
 FLORENCE_FORGE_DISABLE_V1_TRAINER_WARNING=1 florence_forge_cli train --config my_config.yaml
 ```
 
+### coco128 LoRA 训练
+
+仓库内提供了两份轻量模板，便于先用 coco128 跑通 OD LoRA 闭环：
+模板默认设置 `save_full_model_on_end: false`，训练结束保存 LoRA adapter，
+避免把基础大模型权重重复落盘；需要完整权重时可在 YAML 中改回 `true`。
+
+```bash
+# Florence-2：直接使用 Florence OD JSONL
+florence_forge_cli train \
+  --config configs/examples/coco128_florence_od_lora.yaml \
+  --train-data /path/to/coco128/coco128_od.jsonl \
+  --val-data /path/to/coco128/coco8_od.jsonl
+
+# PaliGemma：先把 Florence OD suffix 转成 PaliGemma <loc0000> 格式
+python scripts/data-conversion/convert_florence_od_to_paligemma.py \
+  --input-jsonl /path/to/coco128/coco128_od.jsonl \
+  --output-jsonl /path/to/coco128/coco128_paligemma_od.jsonl
+
+python scripts/data-conversion/convert_florence_od_to_paligemma.py \
+  --input-jsonl /path/to/coco128/coco8_od.jsonl \
+  --output-jsonl /path/to/coco128/coco8_paligemma_od.jsonl
+
+florence_forge_cli train \
+  --config configs/examples/coco128_paligemma_od_lora.yaml \
+  --train-data /path/to/coco128/coco128_paligemma_od.jsonl \
+  --val-data /path/to/coco128/coco8_paligemma_od.jsonl
+```
+
+如果 PaliGemma 权重来自 ModelScope 或其他本地缓存，可直接覆盖模型路径：
+
+```bash
+florence_forge_cli train \
+  --config configs/examples/coco128_paligemma_od_lora.yaml \
+  --model /path/to/paligemma-3b-pt-224 \
+  --train-data /path/to/coco128/coco128_paligemma_od.jsonl
+```
+
 ### Python API
 
 ```python

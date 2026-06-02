@@ -203,39 +203,57 @@ result = model.predict_task(
 
 ```yaml
 # configs/paligemma_caption.yaml
-model:
+num_epochs: 10
+max_steps: null
+output_dir: "./output/paligemma_caption"
+logging_dir: "./output/paligemma_caption/logs"
+save_full_model_on_end: false
+device: "auto"
+use_fp16: false
+use_bf16: true
+gradient_accumulation_steps: 1
+
+tasks:
+  - "CAPTION"
+train_data_path: "./data/caption_train.jsonl"
+val_data_path: "./data/caption_val.jsonl"
+
+model_config:
   model_name: "google/paligemma-3b-pt-224"
   backend_name: "paligemma"
   trust_remote_code: true
+  torch_dtype: "auto"
+  device: "auto"
+  device_map: "auto"
   use_lora: true
   lora_config:
     r: 16
     lora_alpha: 32
     target_modules:
       - "q_proj"
-      - "v_proj"
       - "k_proj"
+      - "v_proj"
       - "o_proj"
     lora_dropout: 0.05
+    bias: "none"
+    task_type: "CAUSAL_LM"
 
-data:
+data_config:
   batch_size: 4
   num_workers: 2
   use_cache: true
   cache_dir: "./cache/paligemma"
 
-optimization:
+optimization_config:
   learning_rate: 1.0e-4
   weight_decay: 0.01
   max_grad_norm: 1.0
   lr_scheduler_type: "cosine"
   warmup_ratio: 0.1
 
-training:
-  num_epochs: 10
-  output_dir: "./output/paligemma_caption"
-  device: "auto"
-  use_bf16: true
+task_scheduling_config:
+  strategy: "round_robin"
+  temperature: 1.0
 ```
 
 ### Python 配置
@@ -266,11 +284,15 @@ training_config = TrainingConfig(
     data_config=data_config,
     optimization_config=OptimizationConfig(
         learning_rate=1e-4,
-        use_bf16=True,
     ),
     output_dir="./output/paligemma_caption",
+    use_bf16=True,
 )
 ```
+
+目标检测微调时，PaliGemma 使用 `detect` prompt 与 `<loc0000>` 风格坐标 token；
+Florence-2 的 `<OD>` JSON suffix 可通过
+`scripts/data-conversion/convert_florence_od_to_paligemma.py` 转换后再训练。
 
 ---
 
