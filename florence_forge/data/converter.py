@@ -6,8 +6,11 @@
 import json
 import csv
 import logging
+import xml.etree.ElementTree as ET
 from typing import List, Tuple, Dict, Any
 from pathlib import Path
+
+import pandas as pd
 from PIL import Image, ImageDraw
 from tqdm import tqdm
 

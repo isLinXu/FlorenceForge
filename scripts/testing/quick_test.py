@@ -19,10 +19,18 @@ import json
 import yaml
 import logging
 import time
+from pathlib import Path
+from typing import Any, Dict, Optional, Tuple
 
 # 添加项目根目录到Python路径
-project_root = Path(__file__).parent.parent
+# 本脚本位于 scripts/testing/ 下，仓库根目录需向上回溯三层
+project_root = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(project_root))
+
+try:
+    from florence_forge.utils.logging import setup_logging
+except ImportError:
+    setup_logging = None
 
 # 简化导入，避免循环依赖
 try:
@@ -354,7 +362,8 @@ class QuickTester:
                     all_passed = False
         
         return all_passed
-    
+
+    def _check_yaml_syntax(self, config_path: Path) -> Tuple[bool, str]:
         """检查YAML语法"""
         try:
             with open(config_path, 'r', encoding='utf-8') as f:
@@ -364,7 +373,8 @@ class QuickTester:
             return False, str(e)
         except Exception as e:
             return False, str(e)
-    
+
+    def _validate_config_content(self, config_path: Path) -> Tuple[bool, str]:
         """验证配置文件内容"""
         try:
             with open(config_path, 'r', encoding='utf-8') as f:
