@@ -214,7 +214,7 @@ temp/
 output/
 outputs/
 runs/
-evaluation/
+/evaluation/
 benchmark_cache/
 .benchmarks/
 

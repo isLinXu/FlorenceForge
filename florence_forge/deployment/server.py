@@ -11,14 +11,18 @@ import logging
 import time
 import base64
 import io
+import hmac
+import os
+from collections import deque
 from typing import Union, List, Dict, Any, Optional
 from pathlib import Path
 
 from ..utils.optional_dependencies import missing_dependency_message
 
 try:
-    from fastapi import FastAPI, HTTPException, UploadFile, File
+    from fastapi import FastAPI, HTTPException, UploadFile, File, Request
     from fastapi.middleware.cors import CORSMiddleware
+    from fastapi.responses import JSONResponse
     import uvicorn
     FASTAPI_AVAILABLE = True
     try:
@@ -68,6 +72,8 @@ from .inference import InferenceEngine
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+
 
 class PredictionRequest(BaseModel):
     """预测请求模型"""
@@ -115,7 +121,12 @@ class ModelServer:
         port: int = 8000,
         title: str = "Florence Forge Model Server",
         description: str = "Florence-2 模型推理服务",
-        version: str = "1.0.0"
+        version: str = "1.0.0",
+        cors_origins: Optional[List[str]] = None,
+        allow_credentials: bool = False,
+        api_key: Optional[str] = None,
+        rate_limit_per_minute: Optional[int] = None,
+        max_upload_bytes: int = DEFAULT_MAX_UPLOAD_BYTES,
     ):
         """初始化模型服务器
         
@@ -126,6 +137,11 @@ class ModelServer:
             title: API标题
             description: API描述
             version: API版本
+            cors_origins: 允许跨域访问的 origin 列表。默认不启用 CORS。
+            allow_credentials: 是否允许跨域携带凭证。仅在指定具体 origin 时生效。
+            api_key: 可选 API key。也可通过 FLORENCE_FORGE_API_KEY 环境变量设置。
+            rate_limit_per_minute: 可选的单客户端每分钟请求上限。
+            max_upload_bytes: 上传文件最大字节数。
         """
         if not FASTAPI_AVAILABLE:
             raise ImportError(
@@ -145,6 +161,15 @@ class ModelServer:
             self.inference_backend = NativeInferenceBackend(inference_engine)
         self.host = host
         self.port = port
+        self.cors_origins = self._normalize_cors_origins(cors_origins)
+        self.allow_credentials = allow_credentials
+        self.api_key = api_key or os.environ.get("FLORENCE_FORGE_API_KEY")
+        self.rate_limit_per_minute = (
+            rate_limit_per_minute if rate_limit_per_minute and rate_limit_per_minute > 0 else None
+        )
+        self.max_upload_bytes = max_upload_bytes
+        self._rate_limit_buckets: Dict[str, deque] = {}
+        self._public_paths = {"/", "/health", "/docs", "/redoc", "/openapi.json"}
         
         # 创建FastAPI应用
         self.app = FastAPI(
@@ -153,14 +178,18 @@ class ModelServer:
             version=version
         )
         
-        # 添加CORS中间件
-        self.app.add_middleware(
-            CORSMiddleware,
-            allow_origins=["*"],
-            allow_credentials=True,
-            allow_methods=["*"],
-            allow_headers=["*"],
-        )
+        if self.cors_origins:
+            if "*" in self.cors_origins:
+                logger.warning("CORS allow_origins 包含 '*'，仅建议本地或受控网络调试使用。")
+            self.app.add_middleware(
+                CORSMiddleware,
+                allow_origins=self.cors_origins,
+                allow_credentials=bool(
+                    allow_credentials and "*" not in self.cors_origins
+                ),
+                allow_methods=["GET", "POST"],
+                allow_headers=["Authorization", "Content-Type", "X-API-Key"],
+            )
         
         # 服务器统计信息
         self.stats = {
@@ -172,9 +201,73 @@ class ModelServer:
         }
         
         # 设置路由
+        self._setup_security_middleware()
         self._setup_routes()
         
         logger.info(f"模型服务器初始化完成: {host}:{port}")
+
+    @staticmethod
+    def _normalize_cors_origins(origins: Optional[List[str]]) -> List[str]:
+        if not origins:
+            return []
+
+        normalized: List[str] = []
+        for origin in origins:
+            normalized.extend(
+                item.strip()
+                for item in str(origin).split(",")
+                if item.strip()
+            )
+        return normalized
+
+    def _setup_security_middleware(self) -> None:
+        """Add optional API-key auth and coarse in-memory rate limiting."""
+
+        @self.app.middleware("http")
+        async def security_middleware(request: Request, call_next):
+            try:
+                if request.url.path not in self._public_paths:
+                    self._check_api_key(request)
+                    self._check_rate_limit(request)
+                return await call_next(request)
+            except HTTPException as exc:
+                return JSONResponse(
+                    status_code=exc.status_code,
+                    content={"detail": exc.detail},
+                )
+
+    def _check_api_key(self, request: Request) -> None:
+        if not self.api_key:
+            return
+
+        header_key = request.headers.get("x-api-key", "")
+        auth_header = request.headers.get("authorization", "")
+        bearer_key = ""
+        if auth_header.lower().startswith("bearer "):
+            bearer_key = auth_header[7:].strip()
+
+        if not (
+            hmac.compare_digest(header_key, self.api_key)
+            or hmac.compare_digest(bearer_key, self.api_key)
+        ):
+            raise HTTPException(status_code=401, detail="Unauthorized")
+
+    def _check_rate_limit(self, request: Request) -> None:
+        if not self.rate_limit_per_minute:
+            return
+
+        now = time.time()
+        window_start = now - 60
+        client_host = request.client.host if request.client else "unknown"
+        bucket = self._rate_limit_buckets.setdefault(client_host, deque())
+
+        while bucket and bucket[0] < window_start:
+            bucket.popleft()
+
+        if len(bucket) >= self.rate_limit_per_minute:
+            raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
+        bucket.append(now)
     
     def _setup_routes(self):
         """设置API路由"""
@@ -236,8 +329,12 @@ class ModelServer:
                 inference_time = time.time() - start_time
                 self._update_stats(inference_time, success=False)
                 
-                logger.error(f"预测失败: {e}")
-                raise HTTPException(status_code=500, detail=str(e))
+                if isinstance(e, HTTPException):
+                    raise
+                if isinstance(e, ValueError):
+                    raise HTTPException(status_code=400, detail=str(e))
+                logger.exception("预测失败")
+                raise HTTPException(status_code=500, detail="预测失败")
         
         @self.app.post("/predict/batch")
         async def predict_batch(request: BatchPredictionRequest):
@@ -278,8 +375,12 @@ class ModelServer:
                 inference_time = time.time() - start_time
                 self._update_stats(inference_time, success=False)
                 
-                logger.error(f"批量预测失败: {e}")
-                raise HTTPException(status_code=500, detail=str(e))
+                if isinstance(e, HTTPException):
+                    raise
+                if isinstance(e, ValueError):
+                    raise HTTPException(status_code=400, detail=str(e))
+                logger.exception("批量预测失败")
+                raise HTTPException(status_code=500, detail="批量预测失败")
         
         if MULTIPART_AVAILABLE:
             @self.app.post("/predict/upload")
@@ -290,6 +391,11 @@ class ModelServer:
                 try:
                     # 读取文件内容
                     contents = await file.read()
+                    if len(contents) > self.max_upload_bytes:
+                        raise HTTPException(
+                            status_code=413,
+                            detail="上传文件超过大小限制",
+                        )
                     content_type = file.content_type or ""
                     
                     # 根据文件类型处理
@@ -332,8 +438,10 @@ class ModelServer:
                     inference_time = time.time() - start_time
                     self._update_stats(inference_time, success=False)
                     
-                    logger.error(f"文件上传预测失败: {e}")
-                    raise HTTPException(status_code=500, detail=str(e))
+                    if isinstance(e, HTTPException):
+                        raise
+                    logger.exception("文件上传预测失败")
+                    raise HTTPException(status_code=500, detail="文件上传预测失败")
         else:
             @self.app.post("/predict/upload")
             async def predict_upload_unavailable():
@@ -380,7 +488,7 @@ class ModelServer:
                 }
             except Exception as e:
                 logger.error(f"基准测试失败: {e}")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail="基准测试失败")
     
     def _parse_input_data(
         self, 
@@ -406,7 +514,7 @@ class ModelServer:
                 if data.startswith('data:'):
                     data = data.split(',')[1]
                 
-                image_bytes = base64.b64decode(data)
+                image_bytes = base64.b64decode(data, validate=True)
                 
                 if not PIL_AVAILABLE:
                     raise ValueError("需要安装PIL库处理base64图像")
@@ -580,6 +688,12 @@ def create_server(
     Returns:
         模型服务器实例
     """
+    cors_origins = engine_kwargs.pop("cors_origins", None)
+    allow_credentials = engine_kwargs.pop("allow_credentials", False)
+    api_key = engine_kwargs.pop("api_key", None)
+    rate_limit_per_minute = engine_kwargs.pop("rate_limit_per_minute", None)
+    max_upload_bytes = engine_kwargs.pop("max_upload_bytes", DEFAULT_MAX_UPLOAD_BYTES)
+
     if backend == "native":
         inference_backend: Union[InferenceEngine, InferenceBackend] = InferenceEngine(
             model=model_path,
@@ -595,7 +709,12 @@ def create_server(
     server = ModelServer(
         inference_engine=inference_backend,
         host=host,
-        port=port
+        port=port,
+        cors_origins=cors_origins,
+        allow_credentials=allow_credentials,
+        api_key=api_key,
+        rate_limit_per_minute=rate_limit_per_minute,
+        max_upload_bytes=max_upload_bytes,
     )
     
     return server

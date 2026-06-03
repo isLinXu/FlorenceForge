@@ -118,7 +118,10 @@ def test_config_manager_pickle_roundtrip(tmp_path):
     cm.set("x", [1, 2, 3])
     cm.save_config()
 
-    reloaded = ConfigManager(path)
+    untrusted = ConfigManager(path)
+    assert untrusted.to_dict() == {}
+
+    reloaded = ConfigManager(path, trusted=True)
     assert reloaded.get("x") == [1, 2, 3]
 
 

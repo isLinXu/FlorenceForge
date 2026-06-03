@@ -474,9 +474,9 @@ def create_parser() -> argparse.ArgumentParser:
     )
     train_parser.add_argument(
         '--trainer-version',
-        choices=['v1', 'v2'],
-        default='v1',
-        help='训练器实现版本：v1 为兼容默认值，v2 为模块化重构版 (默认: v1)'
+        choices=['v2'],
+        default='v2',
+        help='训练器实现版本（v2.0.0 起仅支持 v2 模块化栈）',
     )
     
     # 列出任务命令
@@ -677,6 +677,32 @@ def create_parser() -> argparse.ArgumentParser:
         '--use-amp',
         action='store_true',
         help='使用自动混合精度加速推理'
+    )
+    serve_parser.add_argument(
+        '--cors-origin',
+        action='append',
+        dest='cors_origins',
+        help='允许跨域访问的 origin，可重复传入；默认不启用 CORS'
+    )
+    serve_parser.add_argument(
+        '--allow-credentials',
+        action='store_true',
+        help='允许跨域凭证，仅在指定具体 --cors-origin 时生效'
+    )
+    serve_parser.add_argument(
+        '--api-key',
+        help='启用 API Key 鉴权；客户端需传 X-API-Key 或 Authorization: Bearer'
+    )
+    serve_parser.add_argument(
+        '--rate-limit-per-minute',
+        type=int,
+        help='单客户端每分钟请求上限；默认不限流'
+    )
+    serve_parser.add_argument(
+        '--max-upload-mb',
+        type=float,
+        default=10.0,
+        help='上传文件大小上限 MB (默认: 10)'
     )
     
     # 评估命令

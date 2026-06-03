@@ -116,11 +116,11 @@ def load_pickle(file_path: Union[str, Path], trusted: bool = False) -> Any:
     """从Pickle文件加载数据
 
     安全警告：``pickle.load`` 会在反序列化时执行任意代码，绝不要加载来源不可信的
-    pickle 文件。仅当你确认文件来自可信来源时，传入 ``trusted=True`` 以抑制告警。
+    pickle 文件。仅当你确认文件来自可信来源时，传入 ``trusted=True`` 允许加载。
 
     Args:
         file_path: 文件路径
-        trusted: 是否确认文件来源可信（仅用于抑制安全告警，不改变加载行为）
+        trusted: 是否确认文件来源可信。默认拒绝加载，避免执行不可信 pickle。
 
     Returns:
         加载的数据
@@ -131,12 +131,15 @@ def load_pickle(file_path: Union[str, Path], trusted: bool = False) -> Any:
         raise FileNotFoundError(f"Pickle文件不存在: {file_path}")
 
     if not trusted:
-        logger.warning(
-            "正在通过 pickle.load 反序列化 %s；pickle 会执行任意代码，"
-            "只应加载可信来源的文件。确认可信后可传入 trusted=True 抑制此告警。",
-            file_path,
+        raise ValueError(
+            "拒绝加载不可信 Pickle 文件。pickle.load 会在反序列化时执行任意代码；"
+            "确认文件来自可信来源后，请传入 trusted=True。"
         )
 
+    logger.warning(
+        "正在通过 pickle.load 反序列化可信文件 %s；请确认该文件未被篡改。",
+        file_path,
+    )
     with open(file_path, 'rb') as f:
         return pickle.load(f)
 
@@ -447,7 +450,7 @@ class FileManager:
         save_pickle(data, file_path)
         return file_path
     
-    def load_pickle(self, *path_parts: str) -> Any:
+    def load_pickle(self, *path_parts: str, trusted: bool = False) -> Any:
         """加载Pickle文件
         
         Args:
@@ -457,7 +460,7 @@ class FileManager:
             加载的数据
         """
         file_path = self.get_path(*path_parts)
-        return load_pickle(file_path)
+        return load_pickle(file_path, trusted=trusted)
     
     def exists(self, *path_parts: str) -> bool:
         """检查文件是否存在

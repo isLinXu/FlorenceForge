@@ -19,12 +19,19 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Dict, Iterable, Optional
+from typing import TYPE_CHECKING, Any, Dict, Iterable, Optional
 
-from florence_forge.utils.diagnostics import DEFAULT_MODEL_ID, find_local_hf_snapshot
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from florence_forge.utils.diagnostics import DEFAULT_MODEL_ID, find_local_hf_snapshot  # noqa: E402
+
+if TYPE_CHECKING:
+    import torch
 
 
 DEFAULT_TRAINABLE_MATCH = "language_model.model.decoder.layers.5.fc2"
@@ -110,8 +117,6 @@ def _parameter_delta_norm(
     before: Iterable["torch.Tensor"],
     after: Iterable["torch.nn.Parameter"],
 ) -> float:
-    import torch
-
     total = 0.0
     for before_param, after_param in zip(before, after):
         total += float((after_param.detach() - before_param).float().norm().cpu())

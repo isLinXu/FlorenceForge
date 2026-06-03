@@ -17,9 +17,11 @@ import subprocess
 import json
 import logging
 import time
+from pathlib import Path
+from typing import Dict, List
 
 # 添加项目根目录到Python路径
-project_root = Path(__file__).parent.parent
+project_root = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(project_root))
 
 try:
@@ -562,7 +564,7 @@ def main():
     level = logging.DEBUG if args.verbose else logging.INFO
     try:
         setup_logging(level=level)
-    except:
+    except Exception:
         logging.basicConfig(level=level)
     
     examples = UsageExamples()

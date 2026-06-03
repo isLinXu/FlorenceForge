@@ -432,14 +432,15 @@ class TestGradientCheckpointOptimizer:
     """测试梯度检查点优化器"""
     
     def test_auto_strategy_selection(self, training_config, mock_model):
-        """测试策略自动选择"""
-        optimizer = GradientCheckpointOptimizer(
-            model=mock_model,
-            config=training_config
+        """测试策略自动选择（共享 ActivationCheckpointingApplier）"""
+        from florence_forge.training.activation_checkpointing import ActivationCheckpointingApplier
+
+        training_config.model_settings.activation_checkpointing_strategy = "auto"
+        applier = ActivationCheckpointingApplier.from_training_config(
+            mock_model, training_config
         )
-        
-        strategy = optimizer._auto_select_strategy()
-        assert strategy in ['full', 'selective']
+        strategy = applier._auto_select_checkpoint_strategy()
+        assert strategy in ["full", "selective", "none"]
     
     def test_enable_gradient_checkpointing(self, training_config):
         """测试启用梯度检查点"""

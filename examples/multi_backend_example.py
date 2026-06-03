@@ -172,7 +172,7 @@ def run_training(backend_name: str, data_path: str, output_dir: str,
     )
     from florence_forge.core.model import Florence2MultiTaskModel
     from florence_forge.data.dataset import MultiTaskDataset
-    from florence_forge.training.trainer import MultiTaskTrainer
+    from florence_forge.training.trainer_refactored import MultiTaskTrainer
 
     logger.info(f"=" * 60)
     logger.info(f"训练后端: {backend_name}")

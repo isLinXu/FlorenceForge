@@ -31,12 +31,12 @@ logger = logging.getLogger(__name__)
 
 def _select_trainer_class(version: str):
     """Select the training stack requested by CLI or programmatic callers."""
-    normalized = (version or "v1").strip().lower()
+    normalized = (version or "v2").strip().lower()
     if normalized in {"v1", "legacy"}:
-        from florence_forge.training.trainer import MultiTaskTrainer
-
-        return MultiTaskTrainer
-    if normalized in {"v2", "refactored", "modular"}:
+        raise ValueError(
+            "训练器 v1 已在 v2.0.0 移除；请省略 --trainer-version 或显式使用 v2。"
+        )
+    if normalized in {"v2", "refactored", "modular", ""}:
         from florence_forge.training.trainer_refactored import MultiTaskTrainer
 
         return MultiTaskTrainer
@@ -255,6 +255,16 @@ def run_serve_task(args) -> bool:
     model_revision = getattr(args, 'model_revision', None)
     if model_revision:
         logger.info(f"   模型 revision: {model_revision}")
+    cors_origins = getattr(args, 'cors_origins', None)
+    api_key = getattr(args, 'api_key', None)
+    rate_limit_per_minute = getattr(args, 'rate_limit_per_minute', None)
+    max_upload_mb = getattr(args, 'max_upload_mb', 10.0)
+    if cors_origins:
+        logger.info(f"   CORS origins: {cors_origins}")
+    if api_key:
+        logger.info("   API Key 鉴权: enabled")
+    if rate_limit_per_minute:
+        logger.info(f"   限流: {rate_limit_per_minute}/minute")
 
     server = create_server(
         model_path=model_path,
@@ -265,6 +275,11 @@ def run_serve_task(args) -> bool:
         batch_size=getattr(args, 'batch_size', 1),
         use_amp=getattr(args, 'use_amp', False),
         model_revision=model_revision,
+        cors_origins=cors_origins,
+        allow_credentials=getattr(args, 'allow_credentials', False),
+        api_key=api_key,
+        rate_limit_per_minute=rate_limit_per_minute,
+        max_upload_bytes=int(max_upload_mb * 1024 * 1024),
     )
     server.run(host=host, port=port)
     return True
@@ -528,7 +543,7 @@ def run_training_task(
     try:
         from florence_forge.core.model import Florence2MultiTaskModel
         from florence_forge.training.config import load_config_from_file
-        trainer_version = overrides.pop("trainer_version", "v1")
+        trainer_version = overrides.pop("trainer_version", "v2")
         MultiTaskTrainer = _select_trainer_class(trainer_version)
 
         # 确定配置文件路径

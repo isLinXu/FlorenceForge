@@ -10,7 +10,7 @@ import shutil
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from florence_forge.training.checkpoint import CheckpointManager
+from florence_forge.training.checkpoint import DirectoryCheckpointManager as CheckpointManager
 
 
 @pytest.fixture
@@ -37,6 +37,13 @@ def simple_model():
 def simple_optimizer(simple_model):
     """创建简单测试优化器"""
     return torch.optim.SGD(simple_model.parameters(), lr=0.01)
+
+
+class TestCheckpointLegacyAlias:
+    def test_checkpoint_manager_alias_is_directory_manager(self):
+        from florence_forge.training import checkpoint as checkpoint_module
+
+        assert checkpoint_module.CheckpointManager is checkpoint_module.DirectoryCheckpointManager
 
 
 class TestCheckpointManagerInit:

@@ -1,23 +1,10 @@
 """训练器检查点管理模块（v2 · OO 生命周期版）
 
-⚠️ 仓库内同时存在两个 `CheckpointManager`：
-- `checkpoint.py::CheckpointManager`（v1 函数式工具集，配套 `create_checkpoint_manager / save_model_only / load_model_only`）
-- 本文件 `checkpoint_manager.py::CheckpointManager`（v2 OO 生命周期版，供 `trainer_refactored` 使用）
+``from florence_forge.training import CheckpointManager`` 指向本类。
 
-二者**分工明确，不要混用**：
-- 写新代码、走 v2 训练栈 → 用本文件的 `CheckpointManager`
-- 兼容旧脚本 / 仅需 save_model_only 工具 → 用 `checkpoint.py`
-
-收敛进度（v1.1.0）：两者已共用 `_checkpoint_io.py` 的底层原语
-（原子写 `atomic_torch_save`、fail-closed 加载 `load_checkpoint_file`、
-通用保留策略 `prune_checkpoints`），消除重复且易错的序列化逻辑；
-对外 API 与磁盘布局保持不变。完整合并见 `docs/v1_v2_Migration_Timeline.md`（v1.2.0）。
-
-测试覆盖：
-- `tests/test_checkpoint.py` → v1
-- `tests/test_training_integration.py` → v2
-
-提供检查点保存、加载、清理和模型合并功能
+目录式遗留 API 见 ``checkpoint.py::DirectoryCheckpointManager``（及模块内
+``CheckpointManager`` 别名）；工具函数 ``save_model_only`` / ``load_model_only``
+亦在该模块。底层序列化与目录式 API 共用 ``_checkpoint_io``。
 """
 import os
 import json

@@ -293,7 +293,7 @@ class ExampleRunner:
         logger.info("运行训练流程示例...")
         
         try:
-            from florence_forge.training.trainer import MultiTaskTrainer
+            from florence_forge.training.trainer_refactored import MultiTaskTrainer
             from florence_forge.training.scheduler import TaskScheduler
             from florence_forge.core.config import TrainingConfig
             
