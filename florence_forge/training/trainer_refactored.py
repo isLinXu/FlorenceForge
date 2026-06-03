@@ -192,18 +192,18 @@ class MultiTaskTrainer:
         # 4. 学习率调度器
         self._setup_lr_scheduler()
         
-        # 5. LoRA 管理器
-        if self.config.use_lora:
-            from .lora_manager import LoRAManager
-            self.lora_manager = LoRAManager(self.model, self.config.lora)
-            self.lora_manager.apply_lora()
+        # 5. LoRA（已在 Florence2MultiTaskModel.load() 注入时跳过重复应用）
+        if self.config.use_lora and not getattr(self.model, "is_peft_model", False):
+            logger.warning(
+                "use_lora=True 但模型未标记为 PEFT；请确认已调用 model.load()"
+            )
         
         # 6. 任务调度器
         if hasattr(self.config, 'use_task_scheduler') and self.config.use_task_scheduler:
             self.task_scheduler = TaskScheduler(self.train_dataset, self.config)
         
         # 7. 回调管理器
-        if self.config.use_callbacks:
+        if getattr(self.config, "use_callbacks", False):
             self.callback_manager = create_default_callbacks(self.config)
             self.training_loop.callback_manager = self.callback_manager
         
@@ -234,22 +234,25 @@ class MultiTaskTrainer:
     
     def _setup_dataloaders(self) -> None:
         """设置数据加载器"""
+        data = self.config.data_settings
+        device_type = self.device_config.device_type or self.device_config.setup_device()
+        pin_memory = bool(data.pin_memory and device_type == "cuda")
         self.train_dataloader = TaskDataLoader(
             dataset=self.train_dataset,
-            batch_size=self.config.batch_size,
-            shuffle=True,
-            num_workers=self.config.num_workers,
-            pin_memory=True,
-            drop_last=True
+            batch_size=data.batch_size,
+            shuffle=data.shuffle,
+            num_workers=data.num_workers,
+            pin_memory=pin_memory,
+            drop_last=data.drop_last,
         )
-        
+
         if self.val_dataset is not None:
             self.val_dataloader = TaskDataLoader(
                 dataset=self.val_dataset,
-                batch_size=self.config.eval_batch_size or self.config.batch_size,
+                batch_size=data.batch_size,
                 shuffle=False,
-                num_workers=self.config.num_workers,
-                pin_memory=True
+                num_workers=data.num_workers,
+                pin_memory=pin_memory,
             )
     
     def _setup_optimizer(self) -> None:
@@ -310,7 +313,7 @@ class MultiTaskTrainer:
             logger.info(
                 format_training_start(
                     epochs=self.config.num_epochs,
-                    batch_size=self.config.batch_size,
+                    batch_size=self.config.data_settings.batch_size,
                     gradient_accumulation_steps=self.config.gradient_accumulation_steps,
                     logging_steps=self.config.logging_steps,
                 )
