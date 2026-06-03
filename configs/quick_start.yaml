@@ -10,7 +10,7 @@ logging_steps: 50
 # 输出目录
 output_dir: "./outputs/quick_start"
 
-# 混合精度（推荐开启以节省显存）
+# 混合精度：CUDA 上 use_bf16 可省显存；Apple MPS 默认 FP32（更稳定，避免 LoRA loss=nan）
 use_fp16: false
 use_bf16: true
 
