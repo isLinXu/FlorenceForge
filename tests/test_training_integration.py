@@ -386,6 +386,78 @@ class TestTrainingLoop:
         assert loop.global_step == 3
         assert loop._max_steps_reached()
 
+    def test_train_epoch_skips_batch_with_no_supervised_labels(self, training_config):
+        """labels 全为 -100 时不应反传或更新参数。"""
+        class NanLossModel(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.dummy = nn.Parameter(torch.zeros(1))
+
+            def forward(self, **kwargs):
+                raise AssertionError("forward should not run when labels are all masked")
+
+        batch = {
+            "input_ids": torch.tensor([[1, 2, 3]]),
+            "attention_mask": torch.tensor([[1, 1, 1]]),
+            "labels": torch.full((1, 3), -100),
+            "task_type": "CAPTION",
+        }
+
+        class SingleBatchLoader:
+            def __iter__(self):
+                return iter([batch])
+
+            def __len__(self):
+                return 1
+
+        model = NanLossModel()
+        optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+        loop = TrainingLoop(model=model, config=training_config, accelerator=None)
+        metrics = loop.train_epoch(
+            train_dataloader=SingleBatchLoader(),
+            optimizer=optimizer,
+            lr_scheduler=None,
+            epoch=0,
+        )
+        assert loop.global_step == 0
+        assert metrics["loss"] == 0.0
+
+    def test_train_epoch_skips_non_finite_loss(self, training_config):
+        """loss 为 nan/inf 时跳过反传，global_step 不增加。"""
+        class NonFiniteLossModel(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.dummy = nn.Parameter(torch.zeros(1))
+
+            def forward(self, **kwargs):
+                return type("Out", (), {"loss": torch.tensor(float("nan"))})()
+
+        batch = {
+            "input_ids": torch.tensor([[1, 2, 3]]),
+            "attention_mask": torch.tensor([[1, 1, 1]]),
+            "labels": torch.tensor([[0, 1, 2]]),
+            "task_type": "CAPTION",
+        }
+
+        class SingleBatchLoader:
+            def __iter__(self):
+                return iter([batch])
+
+            def __len__(self):
+                return 1
+
+        model = NonFiniteLossModel()
+        optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+        loop = TrainingLoop(model=model, config=training_config, accelerator=None)
+        metrics = loop.train_epoch(
+            train_dataloader=SingleBatchLoader(),
+            optimizer=optimizer,
+            lr_scheduler=None,
+            epoch=0,
+        )
+        assert loop.global_step == 0
+        assert metrics["loss"] == 0.0
+
     def test_max_steps_reached_false_when_unset(self, training_config, mock_model):
         """未设定 max_steps 时不应触发提前终止。"""
         training_config.max_steps = None
