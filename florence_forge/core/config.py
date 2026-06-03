@@ -678,6 +678,54 @@ class TrainingConfig(WarnOnUnknownFieldsModel):
             )
         return self
 
+    @model_validator(mode="after")
+    def _sync_device_to_model_settings(self) -> TrainingConfig:
+        """CLI ``--device`` 写入顶层 ``device`` 时同步到 ``model_settings``。"""
+        if self.device and self.device != "auto":
+            self.model_settings.device = self.device
+        return self
+
+    # --- 嵌套配置便捷访问（v2 训练器 / 旧代码兼容） ---
+    @property
+    def num_workers(self) -> int:
+        return self.data_settings.num_workers
+
+    @property
+    def weight_decay(self) -> float:
+        return self.optimization_settings.weight_decay
+
+    @property
+    def adam_beta1(self) -> float:
+        return self.optimization_settings.adam_beta1
+
+    @property
+    def adam_beta2(self) -> float:
+        return self.optimization_settings.adam_beta2
+
+    @property
+    def adam_epsilon(self) -> float:
+        return self.optimization_settings.adam_epsilon
+
+    @property
+    def warmup_ratio(self) -> float:
+        return self.optimization_settings.warmup_ratio
+
+    @property
+    def lr_scheduler_type(self) -> str:
+        return self.optimization_settings.lr_scheduler_type
+
+    @property
+    def use_lora(self) -> bool:
+        return self.model_settings.use_lora
+
+    @property
+    def lora(self) -> LoRAConfig:
+        return self.model_settings.lora_config
+
+    @property
+    def eval_batch_size(self) -> int:
+        return self.data_settings.batch_size
+
     # ===============================================================
     # 序列化
     # ===============================================================
