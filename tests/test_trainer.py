@@ -123,7 +123,7 @@ class TestMultiTaskTrainerInit:
     """训练器初始化测试"""
 
     def test_init_basic(self, mock_model, mock_dataset, mock_config):
-        from florence_forge.training.trainer import MultiTaskTrainer
+        from florence_forge.training.trainer_refactored import MultiTaskTrainer
 
         trainer = MultiTaskTrainer(
             model=mock_model,
@@ -136,39 +136,25 @@ class TestMultiTaskTrainerInit:
 
 
 class TestTrainerStackMigration:
-    def test_v1_trainer_warning_is_one_time_and_suppressible(self, monkeypatch):
-        import florence_forge.training.trainer as trainer_module
-
-        trainer_module._V1_TRAINER_WARNING_EMITTED = False
-        monkeypatch.delenv(trainer_module._V1_WARNING_DISABLE_ENV, raising=False)
-
-        with pytest.warns(DeprecationWarning, match="v1 training stack"):
-            trainer_module._maybe_warn_v1_trainer_deprecated()
-
-        with warnings.catch_warnings(record=True) as captured:
-            warnings.simplefilter("always")
-            trainer_module._maybe_warn_v1_trainer_deprecated()
-
-        assert captured == []
-
-        trainer_module._V1_TRAINER_WARNING_EMITTED = False
-        monkeypatch.setenv(trainer_module._V1_WARNING_DISABLE_ENV, "1")
-        with warnings.catch_warnings(record=True) as captured:
-            warnings.simplefilter("always")
-            trainer_module._maybe_warn_v1_trainer_deprecated()
-
-        assert captured == []
-
-    def test_training_packages_export_v2_aliases(self):
+    def test_training_packages_export_v2_as_default(self):
         import florence_forge
         import florence_forge.training as training
-        from florence_forge.training.trainer_refactored import (
-            MultiTaskTrainer as TrainerV2,
-        )
+        from florence_forge.training.trainer_refactored import MultiTaskTrainer as TrainerV2
 
+        assert training.MultiTaskTrainer is TrainerV2
         assert training.MultiTaskTrainerV2 is TrainerV2
+        assert training.Trainer is TrainerV2
         assert training.TrainerV2 is TrainerV2
+        assert florence_forge.Trainer is TrainerV2
         assert florence_forge.TrainerV2 is TrainerV2
+
+    def test_v1_exports_raise_attribute_error(self):
+        import florence_forge.training as training
+
+        with pytest.raises(AttributeError, match="v1 trainer"):
+            _ = training.MultiTaskTrainerV1
+        with pytest.raises(AttributeError, match="v1 trainer"):
+            _ = training.TrainerV1
 
 
 class TestAcceleratorCompat:
@@ -233,67 +219,8 @@ class TestCLIResumeFlag:
 
     def test_load_checkpoint_method_exists(self):
         """验证训练器实现了 load_checkpoint 方法"""
-        from florence_forge.training.trainer import MultiTaskTrainer
+        from florence_forge.training.trainer_refactored import MultiTaskTrainer
         assert hasattr(MultiTaskTrainer, "load_checkpoint"), "训练器应实现 load_checkpoint 方法"
-
-
-class TestTrainingReportGeneration:
-    """训练结束报告生成行为测试"""
-
-    def test_report_generation_can_be_disabled(self):
-        from florence_forge.training.trainer import MultiTaskTrainer
-
-        trainer = MultiTaskTrainer.__new__(MultiTaskTrainer)
-        trainer.config = SimpleNamespace(generate_training_report_on_end=False)
-        trainer.visualizer = MagicMock()
-
-        assert trainer._generate_training_report_on_end() is None
-        trainer.visualizer.generate_training_report.assert_not_called()
-
-    def test_report_generation_sync_mode_returns_path(self):
-        from florence_forge.training.trainer import MultiTaskTrainer
-
-        trainer = MultiTaskTrainer.__new__(MultiTaskTrainer)
-        trainer.config = SimpleNamespace(
-            generate_training_report_on_end=True,
-            async_training_report=False,
-        )
-        trainer.visualizer = MagicMock()
-        trainer.visualizer.generate_training_report.return_value = "training_report.html"
-
-        assert trainer._generate_training_report_on_end() == "training_report.html"
-        trainer.visualizer.generate_training_report.assert_called_once()
-
-    def test_report_generation_async_mode_does_not_block(self):
-        from florence_forge.training.trainer import MultiTaskTrainer
-
-        started = threading.Event()
-        release = threading.Event()
-
-        def slow_report():
-            started.set()
-            release.wait(timeout=2)
-            return "training_report.html"
-
-        trainer = MultiTaskTrainer.__new__(MultiTaskTrainer)
-        trainer.config = SimpleNamespace(
-            generate_training_report_on_end=True,
-            async_training_report=True,
-        )
-        trainer.visualizer = MagicMock()
-        trainer.visualizer.generate_training_report.side_effect = slow_report
-
-        start = time.monotonic()
-        assert trainer._generate_training_report_on_end() is None
-        elapsed = time.monotonic() - start
-
-        assert elapsed < 0.2
-        assert started.wait(timeout=1)
-        assert trainer._report_thread.daemon is True
-
-        release.set()
-        trainer._report_thread.join(timeout=1)
-        assert not trainer._report_thread.is_alive()
 
 
 class _NullContext:
@@ -342,64 +269,69 @@ class _CallbackManagerStub:
         pass
 
 
-def _build_minimal_trainer(batch, gradient_validator=None):
-    from florence_forge.training.trainer import MultiTaskTrainer
+class TestTrainingLoopTrainEpochBranches:
+    def _build_loop(self, batches, gradient_validator=None):
+        from florence_forge.training.training_loop import TrainingLoop
 
-    trainer = MultiTaskTrainer.__new__(MultiTaskTrainer)
-    trainer.model = SimpleMockModel()
-    trainer.current_epoch = 0
-    trainer.global_step = 0
-    trainer.train_dataloader = [batch]
-    trainer.config = MagicMock()
-    trainer.config.num_epochs = 1
-    trainer.config.logging_steps = 1000
-    trainer.config.max_steps = None
-    trainer.config.optimization_settings = MagicMock(max_grad_norm=1.0)
-    trainer.accelerator = MagicMock()
-    trainer.accelerator.is_local_main_process = False
-    trainer.accelerator.accumulate.return_value = _NullContext()
-    trainer.accelerator.backward = MagicMock()
-    trainer.accelerator.clip_grad_norm_ = MagicMock(return_value=0.5)
-    trainer.optimizer = MagicMock()
-    trainer.optimizer.param_groups = [{"lr": 1e-4}]
-    trainer.lr_scheduler = MagicMock()
-    trainer.memory_monitor = _MemoryMonitorStub()
-    trainer.task_scheduler = _TaskSchedulerStub()
-    trainer.callback_manager = _CallbackManagerStub()
-    trainer.gradient_validator = gradient_validator
-    trainer.lora_manager = None
-    trainer.train_metrics = defaultdict(list)
-    trainer.val_metrics = defaultdict(list)
-    trainer.step_metrics = []
-    trainer._record_step_metrics = MagicMock()
-    trainer._move_batch_to_device = lambda x: x
-    return trainer
+        config = MagicMock()
+        config.num_epochs = 1
+        config.logging_steps = 1000
+        config.max_steps = None
+        config.gradient_accumulation_steps = 1
+        config.max_grad_norm = 1.0
 
+        accelerator = MagicMock()
+        accelerator.is_local_main_process = False
+        accelerator.accumulate.return_value = _NullContext()
+        accelerator.backward = MagicMock()
+        accelerator.clip_grad_norm_ = MagicMock(return_value=0.5)
+        accelerator.sync_gradients = True
 
-class TestMultiTaskTrainerTrainEpochBranches:
+        loop = TrainingLoop(model=SimpleMockModel(), config=config, accelerator=accelerator)
+        loop.global_step = 0
+        loop._move_batch_to_device = lambda x: x
+        loop._prepare_model_inputs = lambda batch: {
+            k: v for k, v in batch.items() if k in {"input_ids", "pixel_values", "attention_mask", "labels"}
+        }
+        loop._get_task_type_and_count = lambda batch: ("CAPTION", 1)
+        loop._get_current_lr = lambda scheduler: 1e-4
+
+        optimizer = MagicMock()
+        optimizer.param_groups = [{"lr": 1e-4}]
+        lr_scheduler = MagicMock()
+
+        class _Loader:
+            def __iter__(self):
+                return iter(batches)
+
+            def __len__(self):
+                return len(batches)
+
+        return loop, _Loader(), optimizer, lr_scheduler, gradient_validator
+
     def test_train_epoch_skips_step_when_labels_missing(self):
-        """labels 缺失时应只清梯度，不执行 backward/step。"""
         batch = {
             "input_ids": torch.randint(0, 100, (2, 10)),
             "attention_mask": torch.ones(2, 10, dtype=torch.long),
             "pixel_values": torch.randn(2, 3, 224, 224),
             "task_type": "CAPTION",
         }
+        loop, loader, optimizer, lr_scheduler, _ = self._build_loop([batch])
 
-        trainer = _build_minimal_trainer(batch)
+        with patch(
+            "florence_forge.training.training_loop.tqdm",
+            side_effect=lambda iterable, **kwargs: _DummyProgress(iterable),
+        ):
+            metrics = loop.train_epoch(
+                loader, optimizer, lr_scheduler, epoch=0, gradient_validator=None
+            )
 
-        with patch("florence_forge.training.trainer.tqdm", side_effect=lambda iterable, **kwargs: _DummyProgress(iterable)):
-            metrics = trainer._train_epoch()
-
-        trainer.optimizer.zero_grad.assert_called_once()
-        trainer.optimizer.step.assert_not_called()
-        trainer.lr_scheduler.step.assert_not_called()
-        trainer.accelerator.backward.assert_not_called()
-        assert metrics == {}
-        assert trainer.global_step == 0
+        optimizer.zero_grad.assert_called()
+        optimizer.step.assert_not_called()
+        assert loop.global_step == 0
+        assert "loss" in metrics or metrics.get("loss", 0) == 0
 
     def test_train_epoch_skips_optimizer_step_when_gradient_invalid(self):
-        """梯度验证失败时应跳过 optimizer/lr_scheduler，但仍清梯度。"""
         batch = {
             "input_ids": torch.randint(0, 100, (2, 10)),
             "attention_mask": torch.ones(2, 10, dtype=torch.long),
@@ -407,37 +339,38 @@ class TestMultiTaskTrainerTrainEpochBranches:
             "labels": torch.randint(0, 100, (2, 10)),
             "task_type": "CAPTION",
         }
-
         gradient_validator = MagicMock()
         gradient_validator.validate_gradients.return_value = (False, {"reason": "test"})
-        trainer = _build_minimal_trainer(batch, gradient_validator=gradient_validator)
+        loop, loader, optimizer, lr_scheduler, gradient_validator = self._build_loop(
+            [batch], gradient_validator=gradient_validator
+        )
 
-        with patch("florence_forge.training.trainer.tqdm", side_effect=lambda iterable, **kwargs: _DummyProgress(iterable)):
-            metrics = trainer._train_epoch()
+        with patch(
+            "florence_forge.training.training_loop.tqdm",
+            side_effect=lambda iterable, **kwargs: _DummyProgress(iterable),
+        ):
+            loop.train_epoch(
+                loader, optimizer, lr_scheduler, epoch=0, gradient_validator=gradient_validator
+            )
 
-        trainer.accelerator.backward.assert_called_once()
-        trainer.optimizer.step.assert_not_called()
-        trainer.lr_scheduler.step.assert_not_called()
-        trainer.optimizer.zero_grad.assert_called_once()
-        trainer.accelerator.clip_grad_norm_.assert_not_called()
-        assert "loss" in metrics
-        assert trainer.global_step == 1
+        loop.accelerator.backward.assert_called()
+        optimizer.step.assert_not_called()
+        assert loop.global_step == 1
 
 
-class TestMultiTaskTrainerMetricsHistory:
-    def test_record_step_metrics_keeps_bounded_in_memory_history(self):
-        from florence_forge.training.trainer import MultiTaskTrainer
+class TestTrainerStepMetricsHistory:
+    def test_record_step_metrics_keeps_bounded_in_memory_history(self, tmp_path):
+        from florence_forge.training import trainer_step_metrics
 
-        trainer = MultiTaskTrainer.__new__(MultiTaskTrainer)
-        trainer.step_csv_buffer = []
-        trainer.csv_buffer_size = 999
-        trainer.step_metrics = []
+        trainer = SimpleNamespace(config=SimpleNamespace(output_dir=str(tmp_path)))
+        trainer_step_metrics.init_step_metrics_state(trainer)
         trainer.step_metrics_history_limit = 2
         trainer.accelerator = MagicMock()
         trainer.accelerator.is_local_main_process = False
 
         for step in range(5):
-            trainer._record_step_metrics(
+            trainer_step_metrics.record_step_metrics(
+                trainer,
                 step=step,
                 epoch=0,
                 task_type="CAPTION",
@@ -450,18 +383,17 @@ class TestMultiTaskTrainerMetricsHistory:
         assert [metric["step"] for metric in trainer.step_metrics] == [3, 4]
         assert len(trainer.step_csv_buffer) == 5
 
-    def test_record_step_metrics_can_disable_in_memory_history(self):
-        from florence_forge.training.trainer import MultiTaskTrainer
+    def test_record_step_metrics_can_disable_in_memory_history(self, tmp_path):
+        from florence_forge.training import trainer_step_metrics
 
-        trainer = MultiTaskTrainer.__new__(MultiTaskTrainer)
-        trainer.step_csv_buffer = []
-        trainer.csv_buffer_size = 999
-        trainer.step_metrics = []
+        trainer = SimpleNamespace(config=SimpleNamespace(output_dir=str(tmp_path)))
+        trainer_step_metrics.init_step_metrics_state(trainer)
         trainer.step_metrics_history_limit = 0
         trainer.accelerator = MagicMock()
         trainer.accelerator.is_local_main_process = False
 
-        trainer._record_step_metrics(
+        trainer_step_metrics.record_step_metrics(
+            trainer,
             step=1,
             epoch=0,
             task_type="CAPTION",

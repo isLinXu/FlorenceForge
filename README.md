@@ -7,7 +7,7 @@
 
 **FlorenceForge** 是一个面向视觉语言模型的多任务微调、评估与部署框架。它以 Florence-2 为主路径，同时通过统一的 VLM 后端注册表支持 PaliGemma、YouTuVL 和通用 Hugging Face VLM 后端。
 
-框架覆盖数据转换、JSONL 数据集、多任务调度、LoRA 微调、量化加载、评估指标、推理脚本和 FastAPI 服务，并提供 v1 兼容训练栈与 v2 模块化训练栈的并行迁移路径。
+框架覆盖数据转换、JSONL 数据集、多任务调度、LoRA 微调、量化加载、评估指标、推理脚本和 FastAPI 服务，并使用 v2 模块化训练栈作为唯一训练入口。
 
 ## ✨ 核心特性
 
@@ -23,7 +23,7 @@
 - Pydantic v2 配置体系提供字段校验、兼容 alias 和 YAML/JSON 序列化。
 
 ### 训练与评估
-- v1 训练栈保留完整兼容性，v2 训练栈提供更清晰的模块边界。
+- v2 训练栈提供清晰的模块边界与统一的训练入口。
 - 支持 Accelerate、FSDP/DeepSpeed 配置、混合精度、梯度累积、梯度检查点和检查点管理。
 - 评估模块包含多任务评估器、基础指标、高级指标、benchmark 缓存和可选 PDF 报告。
 
@@ -89,17 +89,48 @@ florence_forge_cli train \
   --train-data data.jsonl \
   --epochs 5
 
-# 4. 使用模块化 v2 训练栈
+# 4. v2 是唯一训练栈；--trainer-version 可省略
 florence_forge_cli train \
   --config my_config.yaml \
   --train-data data.jsonl \
   --trainer-version v2
 ```
 
-v1 当前仍是兼容默认值。若旧脚本需要临时静默 v1 迁移提示：
+### coco128 LoRA 训练
+
+仓库内提供了两份轻量模板，便于先用 coco128 跑通 OD LoRA 闭环：
+模板默认设置 `save_full_model_on_end: false`，训练结束保存 LoRA adapter，
+避免把基础大模型权重重复落盘；需要完整权重时可在 YAML 中改回 `true`。
 
 ```bash
-FLORENCE_FORGE_DISABLE_V1_TRAINER_WARNING=1 florence_forge_cli train --config my_config.yaml
+# Florence-2：直接使用 Florence OD JSONL
+florence_forge_cli train \
+  --config configs/examples/coco128_florence_od_lora.yaml \
+  --train-data /path/to/coco128/coco128_od.jsonl \
+  --val-data /path/to/coco128/coco8_od.jsonl
+
+# PaliGemma：先把 Florence OD suffix 转成 PaliGemma <loc0000> 格式
+python scripts/data-conversion/convert_florence_od_to_paligemma.py \
+  --input-jsonl /path/to/coco128/coco128_od.jsonl \
+  --output-jsonl /path/to/coco128/coco128_paligemma_od.jsonl
+
+python scripts/data-conversion/convert_florence_od_to_paligemma.py \
+  --input-jsonl /path/to/coco128/coco8_od.jsonl \
+  --output-jsonl /path/to/coco128/coco8_paligemma_od.jsonl
+
+florence_forge_cli train \
+  --config configs/examples/coco128_paligemma_od_lora.yaml \
+  --train-data /path/to/coco128/coco128_paligemma_od.jsonl \
+  --val-data /path/to/coco128/coco8_paligemma_od.jsonl
+```
+
+如果 PaliGemma 权重来自 ModelScope 或其他本地缓存，可直接覆盖模型路径：
+
+```bash
+florence_forge_cli train \
+  --config configs/examples/coco128_paligemma_od_lora.yaml \
+  --model /path/to/paligemma-3b-pt-224 \
+  --train-data /path/to/coco128/coco128_paligemma_od.jsonl
 ```
 
 ### Python API
@@ -108,7 +139,7 @@ FLORENCE_FORGE_DISABLE_V1_TRAINER_WARNING=1 florence_forge_cli train --config my
 from florence_forge import TrainingConfig
 from florence_forge.core.model import Florence2MultiTaskModel
 from florence_forge.data.dataset import MultiTaskDataset
-from florence_forge.training import MultiTaskTrainer, MultiTaskTrainerV2
+from florence_forge.training import MultiTaskTrainer
 
 config = TrainingConfig.from_yaml("my_config.yaml")
 
@@ -126,15 +157,11 @@ train_dataset = MultiTaskDataset(
     processor=model.processor,
 )
 
-# v1 兼容训练栈
 trainer = MultiTaskTrainer(
     model=model,
     train_dataset=train_dataset,
     config=config,
 )
-
-# v2 模块化训练栈可替换为：
-# trainer = MultiTaskTrainerV2(model=model, train_dataset=train_dataset, config=config)
 
 results = trainer.train()
 print(results)
@@ -206,7 +233,7 @@ task_scheduling_config:
   temperature: 1.0
 ```
 
-`max_steps` 一旦设置为正数，会优先于 `num_epochs` 成为训练硬上限；v1/v2 训练栈语义一致。
+`max_steps` 一旦设置为正数，会优先于 `num_epochs` 成为训练硬上限。
 
 ## 🧰 命令行工具
 
@@ -225,7 +252,7 @@ florence_forge_cli train --config config.yaml --resume outputs/checkpoint-1000
 # 分布式训练
 accelerate launch --multi_gpu florence_forge_cli train --config config.yaml
 
-# 选择 v2 训练栈
+# 显式选择 v2 训练栈
 florence_forge_cli train --config config.yaml --trainer-version v2
 ```
 
@@ -334,12 +361,11 @@ florence_forge/
 │   ├── builder.py              # 数据集构建工具
 │   └── augmentation/           # 图像 / 文本 / bbox 增强
 ├── training/
-│   ├── trainer.py              # v1 兼容训练栈
 │   ├── trainer_refactored.py   # v2 模块化训练器
 │   ├── training_loop.py        # v2 训练循环
-│   ├── checkpoint.py           # v1 checkpoint API
+│   ├── checkpoint.py           # 目录式 checkpoint 兼容 API
 │   ├── checkpoint_manager.py   # v2 checkpoint manager
-│   ├── _checkpoint_io.py       # v1/v2 共享安全序列化原语
+│   ├── _checkpoint_io.py       # 共享安全序列化原语
 │   ├── lora_manager.py
 │   ├── scheduler.py
 │   ├── monitoring.py
@@ -391,10 +417,9 @@ backend = create_backend("florence-2", config.model_settings)
 ### 训练器
 
 ```python
-from florence_forge.training import MultiTaskTrainer, MultiTaskTrainerV2
+from florence_forge.training import MultiTaskTrainer
 
-trainer_v1 = MultiTaskTrainer(model=model, train_dataset=train_dataset, config=config)
-trainer_v2 = MultiTaskTrainerV2(model=model, train_dataset=train_dataset, config=config)
+trainer = MultiTaskTrainer(model=model, train_dataset=train_dataset, config=config)
 ```
 
 ### 评估器
@@ -462,8 +487,8 @@ CI 和本地测试中，缺失可选依赖的能力会通过 `pytest.importorski
 - [x] 数据转换、校验和缓存增强
 - [x] FastAPI 推理服务安全默认 host
 - [x] v2 训练栈显式导出与 CLI 选择
-- [ ] 继续补齐 v2 与 v1 的高级训练能力对等
-- [ ] 进一步收敛 v1/v2 checkpoint 对外 API
+- [ ] 继续补齐 v2 高级训练能力测试覆盖
+- [ ] 进一步收敛 checkpoint 对外 API
 - [ ] 扩充每个 CLI 子命令的端到端集成冒烟
 - [ ] 增强公开 API 文档与示例覆盖
 

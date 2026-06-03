@@ -1,6 +1,7 @@
 """CLI inference helper regressions."""
 
 import json
+import pytest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -50,20 +51,37 @@ def test_normalize_inference_stats_fills_missing_fields():
     assert stats["throughput"] == 0.0
 
 
-def test_train_parser_accepts_trainer_version_v2():
+def test_train_parser_defaults_trainer_version_v2():
     parser = create_parser()
 
-    args = parser.parse_args(["train", "--task", "caption", "--trainer-version", "v2"])
+    args = parser.parse_args(["train", "--task", "caption"])
 
     assert args.trainer_version == "v2"
 
 
-def test_select_trainer_class_supports_v2_aliases():
-    from florence_forge.training.trainer import MultiTaskTrainer as TrainerV1
+def test_train_parser_rejects_trainer_version_v1():
+    parser = create_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["train", "--task", "caption", "--trainer-version", "v1"])
+
+
+def test_select_trainer_class_defaults_to_v2():
     from florence_forge.training.trainer_refactored import MultiTaskTrainer as TrainerV2
 
-    assert _select_trainer_class("v1") is TrainerV1
-    assert _select_trainer_class("legacy") is TrainerV1
+    assert _select_trainer_class("") is TrainerV2
+    assert _select_trainer_class(None) is TrainerV2
+
+
+def test_select_trainer_class_rejects_removed_v1():
+    with pytest.raises(ValueError, match="v1"):
+        _select_trainer_class("v1")
+    with pytest.raises(ValueError, match="v1"):
+        _select_trainer_class("legacy")
+
+
+def test_select_trainer_class_supports_v2_aliases():
+    from florence_forge.training.trainer_refactored import MultiTaskTrainer as TrainerV2
+
     assert _select_trainer_class("v2") is TrainerV2
     assert _select_trainer_class("modular") is TrainerV2
 

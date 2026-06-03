@@ -474,9 +474,9 @@ def create_parser() -> argparse.ArgumentParser:
     )
     train_parser.add_argument(
         '--trainer-version',
-        choices=['v1', 'v2'],
-        default='v1',
-        help='训练器实现版本：v1 为兼容默认值，v2 为模块化重构版 (默认: v1)'
+        choices=['v2'],
+        default='v2',
+        help='训练器实现版本（v2.0.0 起仅支持 v2 模块化栈）',
     )
     
     # 列出任务命令

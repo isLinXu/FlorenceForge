@@ -1,6 +1,6 @@
 # v1 / v2 训练栈迁移时间线
 
-> 状态基准：2026-06-01 工作树源码核验（见 `docs/Deep_Analysis_2026-05-30_Verified.md` 与同日增量核验报告）。
+> 状态基准：2026-06-03 工作树源码核验（见 `docs/Deep_Analysis_2026-06-03.md`）。
 > 本文件给出 v1 → v2 训练栈的**正式弃用与迁移计划**，回应增量核验报告 P0/P1 项。
 
 ## 背景
@@ -10,7 +10,7 @@
 | 维度 | v1 (`trainer.py`) | v2 (`trainer_refactored.py` + `training_loop.py` + `checkpoint_manager.py` + `device_config.py`) |
 | --- | --- | --- |
 | 形态 | 单文件 god class（~1369 行） | 组合式模块化（职责分层） |
-| 默认导出 | `MultiTaskTrainer` 指向 v1 | 需显式 `from florence_forge.training.trainer_refactored import MultiTaskTrainer` |
+| 默认导出 | 已移除 | **`MultiTaskTrainer` 指向 v2**（v2.0.0，2026-06-03） |
 | 测试 | `tests/test_trainer.py` | `tests/test_training_integration.py` |
 | CheckpointManager | `checkpoint.py`（函数式工具集） | `checkpoint_manager.py`（OO 生命周期版） |
 
@@ -23,38 +23,39 @@
 | `max_steps` 硬上限 | ✅ | ✅（2026-06-01 补齐） | v2 `TrainingLoop._max_steps_reached` + 内/外层循环终止 |
 | `load_best_model_at_end` | ✅ | ✅（2026-06-01 补齐） | v2 `_maybe_restore_best_model` 收尾前恢复最佳权重 |
 | 梯度验证 / 内存监控 | ✅ | ✅ | v2 在 `train_epoch` 中按间隔触发 |
-| 激活值重计算多档策略 | ✅ | ⚠️ 部分 | v2 `GradientCheckpointOptimizer` 提供 full/selective 自动选择，尚未覆盖 v1 的全部档位 |
-| 双 `CheckpointManager` 合并 | — | ⏳ 待办 | 见下方里程碑 |
+| 激活值重计算多档策略 | ✅ | ✅（2026-06-03） | v1/v2 共用 `training/activation_checkpointing.py`（full/selective/auto/none + KV cache 禁用） |
+| 双 `CheckpointManager` 合并 | — | ✅ 命名收敛 | v2 为默认 `CheckpointManager`；v1 目录式 API 更名为 `DirectoryCheckpointManager` |
 
-> 结论：v2 的核心训练能力已基本达到与 v1 对齐；剩余差距集中在**激活值重计算高级档位**与**双 CheckpointManager 合并**。
+> 结论：v2 的核心训练能力已与 v1 对齐，并已成为唯一训练入口。
 
 ## 迁移里程碑
 
 ### v1.1.0 —「对齐与软弃用」
 - v2 补齐 `max_steps`、`load_best_model_at_end`（**已完成**，2026-06-01）。
-- v2 补齐激活值重计算的剩余档位，达到与 v1 功能对等。
+- v2 补齐激活值重计算的剩余档位，达到与 v1 功能对等（**已完成**，2026-06-03，见 `activation_checkpointing.py`）。
 - 在 v1 `trainer.py` 顶部与 `MultiTaskTrainer.__init__` 中加入**非强制** `DeprecationWarning`（可通过环境变量关闭），引导新代码迁移到 v2。
 - 文档与示例统一推荐 v2 入口。
 
-### v1.2.0 —「默认切换」
-- 顶层默认导出 `florence_forge.training.MultiTaskTrainer` 切换为 v2。
-- 合并双 `CheckpointManager`：保留 `checkpoint_manager.py` 的 OO 生命周期版为唯一实现，
-  将 `checkpoint.py` 中仍被外部脚本依赖的 `save_model_only / load_model_only / create_checkpoint_manager`
-  改为对前者的薄封装（thin shim），保持向后兼容。
-- 补充真实多 GPU CUDA 集成测试覆盖 v2 的 FSDP/DeepSpeed 路径（对应增量报告 P1）。
+### v1.2.0 —「默认切换」（**已完成**，2026-06-03）
+- ✅ 顶层默认导出 `florence_forge.training.MultiTaskTrainer` 与 CLI `--trainer-version` 默认均为 v2。
+- ✅ 短期遗留 v1 训练器导出为 `MultiTaskTrainerV1` / `TrainerV1`，用于迁移窗口。
+- ✅ 目录式检查点类更名为 `DirectoryCheckpointManager`；`checkpoint.py::CheckpointManager` 保留别名。
+- ✅ `save_model_only` / `load_model_only` 已使用 `atomic_torch_save` / `safe_torch_load`。
+- ⏳ 补充真实多 GPU CUDA 集成测试覆盖 v2 的 FSDP/DeepSpeed 路径。
 
-### v2.0.0 —「移除 v1」
-- 删除 `trainer.py`（v1）及 `checkpoint.py` 中已被 shim 取代的实现。
-- 文档归档 v1 资料，移除并存说明。
+### v2.0.0 —「移除 v1」（**已完成核心项**，2026-06-03）
+- ✅ 删除 `trainer.py`（v1）；`MultiTaskTrainerV1` / `TrainerV1` 导出移除；CLI `--trainer-version v1` 报错。
+- ✅ `MultiDatasetTrainer` 迁移至 v2 父类 + 独立 `train()` / `trainer_step_metrics.py`。
+- ✅ v2 训练步 CPU 集成测试（`test_training_distributed_v2.py`）。
+- ✅ `checkpoint.py` 与 `checkpoint_manager.py` 分工文档化；底层共用 `_checkpoint_io`（目录式 API 保留为 `DirectoryCheckpointManager`）。
 
 ## 迁移指引（面向使用者）
 
 ```python
-# 旧（v1，默认导出）
+# 默认（v2，v2.0.0+）
 from florence_forge.training import MultiTaskTrainer
 
-# 新（v2，推荐）
-from florence_forge.training.trainer_refactored import MultiTaskTrainer
+# 细粒度 v2 组件
 from florence_forge.training.training_loop import TrainingLoop
 from florence_forge.training.checkpoint_manager import CheckpointManager
 ```
