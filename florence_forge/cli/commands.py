@@ -31,12 +31,12 @@ logger = logging.getLogger(__name__)
 
 def _select_trainer_class(version: str):
     """Select the training stack requested by CLI or programmatic callers."""
-    normalized = (version or "v1").strip().lower()
+    normalized = (version or "v2").strip().lower()
     if normalized in {"v1", "legacy"}:
-        from florence_forge.training.trainer import MultiTaskTrainer
-
-        return MultiTaskTrainer
-    if normalized in {"v2", "refactored", "modular"}:
+        raise ValueError(
+            "训练器 v1 已在 v2.0.0 移除；请省略 --trainer-version 或显式使用 v2。"
+        )
+    if normalized in {"v2", "refactored", "modular", ""}:
         from florence_forge.training.trainer_refactored import MultiTaskTrainer
 
         return MultiTaskTrainer
@@ -528,7 +528,7 @@ def run_training_task(
     try:
         from florence_forge.core.model import Florence2MultiTaskModel
         from florence_forge.training.config import load_config_from_file
-        trainer_version = overrides.pop("trainer_version", "v1")
+        trainer_version = overrides.pop("trainer_version", "v2")
         MultiTaskTrainer = _select_trainer_class(trainer_version)
 
         # 确定配置文件路径

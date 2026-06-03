@@ -376,7 +376,7 @@ class TestTrainerDistributedEpoch:
 
     def test_sampler_set_epoch_called(self):
         """测试训练循环中正确调用 sampler.set_epoch"""
-        from florence_forge.training.trainer import MultiTaskTrainer
+        from florence_forge.training.trainer_refactored import MultiTaskTrainer
 
         mock_model = MagicMock()
         mock_model.parameters = lambda: [torch.nn.Parameter(torch.tensor(1.0))]

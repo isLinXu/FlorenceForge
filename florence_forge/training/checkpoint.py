@@ -1,14 +1,12 @@
-"""Model checkpoint management module (v1, 函数式工具集).
+"""目录式检查点工具（遗留 API，v1.2.0 收敛命名）。
 
-⚠️ 仓库内同时存在两个 `CheckpointManager`：
-- 本文件 (v1)：`CheckpointManager` + 配套 `create_checkpoint_manager / save_model_only / load_model_only` 函数式工具，被 `trainer.py`（v1 训练栈）和外部脚本使用。
-- `checkpoint_manager.py` (v2)：OO 生命周期版，供 `trainer_refactored.py`（v2 训练栈）使用。
+- **训练栈检查点（推荐）**：``checkpoint_manager.CheckpointManager``（v2 OO 生命周期版），
+  也是 ``from florence_forge.training import CheckpointManager`` 的默认导出。
+- **本模块**：``DirectoryCheckpointManager``（按目录 + epoch/step 文件名保存），
+  以及 ``create_checkpoint_manager / save_model_only / load_model_only`` 工具函数。
 
-二者**分工明确，不要混用**。详情见 `checkpoint_manager.py` 顶部说明。
-（v1.1.0 起两者已共用 `_checkpoint_io.py` 的底层序列化原语，见该模块说明。）
-
-This module provides functionality for saving and loading training checkpoints,
-including model state, optimizer state, and training metadata.
+``CheckpointManager`` 在本模块内保留为 ``DirectoryCheckpointManager`` 的别名，仅供历史导入。
+底层序列化与 v2 共用 ``_checkpoint_io``（``atomic_torch_save`` / ``load_checkpoint_file``）。
 """
 
 import json
@@ -24,8 +22,8 @@ from ._checkpoint_io import atomic_torch_save, load_checkpoint_file
 logger = logging.getLogger(__name__)
 
 
-class CheckpointManager:
-    """Manager for model checkpoints during training."""
+class DirectoryCheckpointManager:
+    """按目录管理训练检查点（遗留 API，与 v2 ``CheckpointManager`` 不同）。"""
     
     def __init__(self, checkpoint_dir: Union[str, Path], max_checkpoints: int = 5):
         """Initialize checkpoint manager.
@@ -339,20 +337,16 @@ class CheckpointManager:
         }
 
 
+# 历史导入路径兼容（v1.2.0 前本类名为 CheckpointManager）
+CheckpointManager = DirectoryCheckpointManager
+
+
 def create_checkpoint_manager(
     checkpoint_dir: Union[str, Path],
-    max_checkpoints: int = 5
-) -> CheckpointManager:
-    """Create a checkpoint manager.
-    
-    Args:
-        checkpoint_dir: Directory to save checkpoints
-        max_checkpoints: Maximum number of checkpoints to keep
-        
-    Returns:
-        CheckpointManager instance
-    """
-    return CheckpointManager(checkpoint_dir, max_checkpoints)
+    max_checkpoints: int = 5,
+) -> DirectoryCheckpointManager:
+    """Create a directory-based checkpoint manager (legacy helper)."""
+    return DirectoryCheckpointManager(checkpoint_dir, max_checkpoints)
 
 
 def save_model_only(
@@ -374,7 +368,7 @@ def save_model_only(
     }
     
     try:
-        torch.save(save_data, save_path)
+        atomic_torch_save(save_data, save_path)
         logger.info(f"Model saved: {save_path}")
     except Exception as e:
         logger.error(f"Failed to save model to {save_path}: {e}")
