@@ -108,6 +108,45 @@ def test_model_server_predict_endpoint_updates_stats():
     assert stats["model_info"] == {"backend": "dummy"}
 
 
+def test_model_server_api_key_and_rate_limit():
+    pytest.importorskip("fastapi")
+    from fastapi.testclient import TestClient
+
+    from florence_forge.deployment.server import ModelServer
+
+    server = ModelServer(
+        DummyBackend(),
+        api_key="secret",
+        rate_limit_per_minute=1,
+        cors_origins=["https://example.com"],
+        allow_credentials=True,
+    )
+    client = TestClient(server.app)
+
+    assert client.get("/health").status_code == 200
+
+    unauthorized = client.post(
+        "/predict",
+        json={"data": [1.0], "format": "array"},
+    )
+    assert unauthorized.status_code == 401
+
+    first = client.post(
+        "/predict",
+        headers={"X-API-Key": "secret", "Origin": "https://example.com"},
+        json={"data": [1.0], "format": "array"},
+    )
+    second = client.post(
+        "/predict",
+        headers={"X-API-Key": "secret"},
+        json={"data": [1.0], "format": "array"},
+    )
+
+    assert first.status_code == 200
+    assert first.headers["access-control-allow-credentials"] == "true"
+    assert second.status_code == 429
+
+
 def test_vllm_backend_fails_with_actionable_error():
     with pytest.raises((ImportError, NotImplementedError)):
         VLLMInferenceBackend("dummy-model")

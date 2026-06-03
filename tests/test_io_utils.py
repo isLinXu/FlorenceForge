@@ -67,7 +67,9 @@ def test_load_yaml_missing_raises(tmp_path):
 def test_pickle_roundtrip(tmp_path):
     path = tmp_path / "obj.pkl"
     save_pickle({"x": (1, 2, 3)}, path)
-    assert load_pickle(path) == {"x": (1, 2, 3)}
+    with pytest.raises(ValueError, match="拒绝加载不可信 Pickle"):
+        load_pickle(path)
+    assert load_pickle(path, trusted=True) == {"x": (1, 2, 3)}
 
 
 def test_load_pickle_missing_raises(tmp_path):
@@ -243,7 +245,9 @@ def test_file_manager_json_pickle_paths(tmp_path):
     assert json_path.parent.name == "sub"
 
     fm.save_pickle([1, 2, 3], "obj.pkl")
-    assert fm.load_pickle("obj.pkl") == [1, 2, 3]
+    with pytest.raises(ValueError, match="拒绝加载不可信 Pickle"):
+        fm.load_pickle("obj.pkl")
+    assert fm.load_pickle("obj.pkl", trusted=True) == [1, 2, 3]
 
 
 def test_file_manager_ensure_dir_and_list(tmp_path):

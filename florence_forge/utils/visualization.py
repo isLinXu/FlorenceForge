@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Union, Tuple, Any
 
 from .optional_dependencies import missing_dependency_message
+from .plot_backend import finalize_matplotlib_figure
 
 
 def _get_pandas():
@@ -147,7 +148,7 @@ def plot_training_curves(
     if save_path:
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
     
-    plt.show()
+    finalize_matplotlib_figure()
 
 def plot_task_distribution(
     task_counts: Dict[str, int],
@@ -193,7 +194,7 @@ def plot_task_distribution(
     if save_path:
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
     
-    plt.show()
+    finalize_matplotlib_figure()
 
 def visualize_detection_results(
     image: Union[str, Path, Any],
@@ -261,7 +262,7 @@ def visualize_detection_results(
     if save_path:
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
     
-    plt.show()
+    finalize_matplotlib_figure()
 
 def plot_confusion_matrix(
     y_true: List[str],
@@ -299,7 +300,7 @@ def plot_confusion_matrix(
     if save_path:
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
     
-    plt.show()
+    finalize_matplotlib_figure()
 
 def plot_metric_comparison(
     metrics_dict: Dict[str, Dict[str, float]],
@@ -359,7 +360,7 @@ def plot_metric_comparison(
     if save_path:
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
     
-    plt.show()
+    finalize_matplotlib_figure()
 
 def create_evaluation_dashboard(
     results: Dict[str, Any],
@@ -481,7 +482,7 @@ def plot_attention_heatmap(
     if save_path:
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
     
-    plt.show()
+    finalize_matplotlib_figure()
 
 def plot_loss_landscape(
     loss_surface: np.ndarray,
@@ -517,7 +518,7 @@ def plot_loss_landscape(
     if save_path:
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
     
-    plt.show()
+    finalize_matplotlib_figure()
 
 def create_training_report(
     training_history: Dict[str, Any],

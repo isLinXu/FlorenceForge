@@ -9,13 +9,17 @@ import json
 import gc
 import psutil
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Any
 from contextlib import contextmanager
 
+import numpy as np
+from PIL import Image
+
 # 添加项目根目录到Python路径
-project_root = Path(__file__).parent.parent
+project_root = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(project_root))
 
 try:
@@ -61,7 +65,6 @@ class PerformanceProfiler:
         start_memory = self.process.memory_info().rss / 1024 / 1024
         
         # GPU信息（如果可用）
-        gpu_usage_start = None
         gpu_memory_start = None
         if torch.cuda.is_available():
             torch.cuda.synchronize()

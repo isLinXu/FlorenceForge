@@ -163,16 +163,18 @@ class ConfigManager:
     支持多种格式的配置文件管理
     """
     
-    def __init__(self, config_path: Union[str, Path]):
+    def __init__(self, config_path: Union[str, Path], trusted: bool = False):
         """初始化配置管理器
         
         Args:
             config_path (Union[str, Path]): 配置文件路径，支持JSON、YAML等格式
+            trusted: 是否允许加载 .pkl 配置文件。默认拒绝，避免 pickle 代码执行。
             
         Note:
             初始化时会自动加载配置文件内容到config_data属性中
         """
         self.config_path = Path(config_path)
+        self.trusted = trusted
         self.config_data = {}
         self.load_config()
     
@@ -193,10 +195,13 @@ class ConfigManager:
                 with open(self.config_path, 'r', encoding='utf-8') as f:
                     self.config_data = yaml.safe_load(f)
             elif suffix == ".pkl":
-                # 安全警告：pickle 会执行任意代码，仅应加载可信来源的配置文件
+                if not self.trusted:
+                    raise ValueError(
+                        "拒绝加载不可信 .pkl 配置；pickle 会执行任意代码。"
+                        "确认来源可信后请使用 ConfigManager(path, trusted=True)。"
+                    )
                 logger.warning(
-                    "正在通过 pickle.load 加载配置 %s；pickle 会执行任意代码，"
-                    "只应加载可信来源的 .pkl 文件。",
+                    "正在通过 pickle.load 加载可信配置 %s；请确认文件未被篡改。",
                     self.config_path,
                 )
                 with open(self.config_path, 'rb') as f:

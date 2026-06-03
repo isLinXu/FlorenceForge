@@ -2,21 +2,9 @@
 """
 Florence Forge — 多任务训练器（v2，模块化重构版）
 
-⚠️ 当前状态（2026-05-21）
-=========================
-本文件提供 **v2 训练栈**，与 `trainer.py`（v1，单文件 god class）并行存在。
-
-- v1 入口：`florence_forge.training.trainer.MultiTaskTrainer`（默认导出，1579 行）
-- v2 入口：本文件 + `training_loop.py` + `checkpoint_manager.py`（模块化）
-
-v2 通过组合 `TrainingLoop` 与 `CheckpointManager` 实现更清晰的职责拆分；
-`tests/test_training_integration.py` 测的是 v2 体系。
-
-两者**功能上不完全等价**：v1 含 FSDP/DeepSpeed Plugin、激活值重计算 4 档策略、
-异步 checkpoint 等高级特性，v2 目前聚焦核心训练循环。
-
-迁移路线（P1）：把 v1 的高级特性逐步移植到 v2，最终统一到 v2 并删除 v1。
-在此之前两套并存，**请不要混用**。
+v2.0.0 起 **唯一训练入口**：``florence_forge.training.MultiTaskTrainer`` → 本文件。
+通过 ``TrainingLoop``、``CheckpointManager``、``DeviceConfigurator`` 组合实现职责拆分。
+历史 v1 ``trainer.py`` 已移除，见 ``docs/v1_v2_Migration_Timeline.md``。
 
 提供完整的多任务训练功能，采用模块化架构
 """
@@ -43,7 +31,6 @@ from ..data.dataset import MultiTaskDataset
 from ..data.loader import TaskDataLoader
 from .scheduler import TaskScheduler
 from .lora_manager import LoRAManager
-from .visualizer import TrainingVisualizer
 from .monitoring import TrainingMonitor
 from .gradient_validator import GradientValidator, GradientValidationConfig
 from .memory_monitor import MemoryMonitor, MemoryMonitorConfig

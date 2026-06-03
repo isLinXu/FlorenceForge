@@ -31,7 +31,7 @@ try:
     from florence_forge.core.model import Florence2MultiTaskModel
     from florence_forge.data.builder import DatasetBuilder
     from florence_forge.data.dataset import MultiTaskDataset, TaskSample
-    from florence_forge.training.trainer import MultiTaskTrainer
+    from florence_forge.training.trainer_refactored import MultiTaskTrainer
     from florence_forge.utils.device import get_device_info, get_optimal_device
     from florence_forge.utils.logging import setup_logging
     from florence_forge.utils.memory import clear_cache, get_memory_usage

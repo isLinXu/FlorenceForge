@@ -8,11 +8,14 @@ import time
 import json
 import logging
 import argparse
+from pathlib import Path
+from typing import Any, Dict, List
 
 # 添加项目根目录到Python路径
-project_root = Path(__file__).parent.parent
+project_root = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(project_root))
 
+from florence_forge.utils.logging import setup_logging  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +57,8 @@ class FlorenceForgeRunner:
         start_time = time.time()
         
         try:
+            from scripts.testing.validation_suite import ValidationSuite
+
             validator = ValidationSuite(output_dir=str(self.validation_dir))
             results = validator.run_all_validations()
             
@@ -81,7 +86,9 @@ class FlorenceForgeRunner:
         start_time = time.time()
         
         try:
-            test_runner = TestRunner(output_dir=str(self.test_dir))
+            from scripts.testing.quick_test import QuickTester
+
+            test_runner = QuickTester()
             results = test_runner.run_all_tests()
             
             duration = time.time() - start_time
@@ -108,6 +115,8 @@ class FlorenceForgeRunner:
         start_time = time.time()
         
         try:
+            from scripts.performance.benchmark_tools import BenchmarkTools
+
             benchmark_tools = BenchmarkTools(output_dir=str(self.benchmark_dir))
             results = benchmark_tools.run_all_benchmarks()
             
@@ -135,6 +144,8 @@ class FlorenceForgeRunner:
         start_time = time.time()
         
         try:
+            from scripts.examples.example_runner import ExampleRunner
+
             example_runner = ExampleRunner(output_dir=str(self.example_dir))
             results = example_runner.run_all_examples()
             

@@ -9,6 +9,7 @@ import numpy as np
 import torch
 
 from florence_forge.data.dataset import MultiTaskDataset, TaskSample, _load_image_cached
+from florence_forge.data.builder import DatasetBuilder
 from florence_forge.core.config import DataConfig
 
 
@@ -76,6 +77,15 @@ class TestTaskSample:
         sample = TaskSample.from_dict(data)
         assert sample.task_type == "OD"
         assert sample.weight == 2.0
+
+
+def test_dataset_builder_get_statistics_empty_builder():
+    builder = DatasetBuilder()
+
+    stats = builder.get_statistics()
+
+    assert stats["num_tasks"] == 0
+    assert stats["estimated_samples"] == {}
 
 
 class TestMultiTaskDataset:

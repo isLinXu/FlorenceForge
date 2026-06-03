@@ -32,7 +32,51 @@
 - **v1 → v2 迁移指南**：`docs/MIGRATION_v1_to_v2.md` 阐明双训练栈现状、并行期、对齐计划与用户迁移路径。
 - **MoE 实验模块文档**：`florence_forge/experimental/moe/README.md` 补充使用示例、设计动机、已知限制。
 
+### Added
+- **v2 分布式冒烟测试**：`tests/test_training_distributed_v2.py` 覆盖 FSDP 插件构建、
+  Accelerator 接线与多 GPU 张量放置（双卡环境自动运行）。
+- **数据集缓存模块**：`data/dataset_types.py`、`data/dataset_sample_cache.py` 与
+  `tests/test_dataset_sample_cache.py`。
+- **数据集 I/O 模块**：`data/dataset_io.py`（JSONL 加载/索引、HF 物化、持久化）与
+  `tests/test_dataset_io.py`。
+- **推理引擎拆分**：`deployment/inference_parsing.py`、`inference_visualization.py`、
+  `inference_loading.py`；`inference.py` 缩减至 ~720 行并保留兼容门面方法。
+- **数据集编码模块**：`data/dataset_encoding.py`（processor/backend 编码、`__getitem__` 逻辑）与
+  `tests/test_dataset_encoding.py`；`dataset.py` 委托编码并保留 `_build_prompt_and_answer` 等兼容门面。
+- **推理运行时模块**：`deployment/inference_runtime.py`（Florence2 生成、PIL/tensor 前向、可视化分发）；
+  `inference.py` 的 `predict` 与 `predict_batch` 复用 `is_florence2_model` 检测（~520 LOC）。
+
 ### Changed
+- **训练可视化瘦身**：``training/visualizer.py`` 移除约 800 行注释掉的旧实现（1265 → ~460 LOC）。
+- **检查点文档收敛**：``checkpoint_manager.py`` 模块说明与 v2 默认导出、``DirectoryCheckpointManager`` 分工对齐。
+
+### Added
+- **评估分析器拆分**：``evaluation/analyzer_deps.py``、``analyzer_scoring.py``、``analyzer_plotting.py``、
+  ``analyzer_diagnostics.py``；``analyzer.py`` 门面约 358 LOC，诊断/聚类逻辑委托子模块。
+- **无头绘图后端**：``utils/plot_backend.py``（``FLORENCE_FORGE_SHOW_PLOTS`` 控制是否 ``plt.show()``）；
+  评估绘图、``utils/visualization``、推理可视化默认 CI 友好关闭图形。
+- **评估测试补强**：``tests/test_analyzer.py`` 增加瓶颈诊断、错误聚类、数据质量冒烟。
+- **数据转换器拆分**：``converter_od`` / ``converter_caption`` / ``converter_ocr`` /
+  ``converter_region`` / ``converter_mask``；``converter.py`` 门面约 63 LOC。
+- **CLI 冒烟扩展**：``convert`` 子命令、``validate``/``generate-config``、``list-tasks`` 子进程、
+  ``--trainer-version`` 仅允许 v2。
+- **可视化与分布式测试**：``tests/test_training_visualizer.py``；``test_training_distributed_v2`` 增加 Accelerate CUDA 训练步与 v2 ``MultiTaskTrainer`` 单步冒烟。
+
+### Removed
+- **v1 训练栈**：删除 ``training/trainer.py``；``MultiTaskTrainerV1`` / ``TrainerV1`` 导出已移除；
+  CLI ``--trainer-version v1`` 将报错并引导使用 v2。
+
+### Changed
+- **v1.2.0 默认训练栈切换**：`from florence_forge.training import MultiTaskTrainer` 与
+  `florence_forge.Trainer` 现指向 v2；遗留 v1 导出为 `MultiTaskTrainerV1` / `TrainerV1`；
+  CLI `train` 默认 `--trainer-version v2`。
+- **检查点 API 命名收敛**：目录式遗留类更名为 `DirectoryCheckpointManager`；
+  `checkpoint.py::CheckpointManager` 保留别名；包级默认 `CheckpointManager` 仍为 v2 OO 版。
+- **激活值重计算共享**：新增 `training/activation_checkpointing.py`，v1/v2 训练栈共用
+  full/selective/auto 策略；修复顶层 `gradient_checkpointing=True` 在 v2 下的启用路径。
+- **`dataset.py` 拆分（第一阶段）**：`TaskSample` 与 `DatasetSampleCache` 抽出独立模块，
+  `MultiTaskDataset` 保留兼容属性 `_cache_index` / `_cache_put` 等。
+- **FSDP 分片策略映射**：`device_config` 现支持 `FULL_SHARD` 等配置值的大小写不敏感解析。
 - **.gitignore 强化**：忽略 `scripts/infer/results_*`、`scripts/infer/images_caption/`、
   `runs/`、`evaluation/`、`.benchmarks/` 以及 `*.onnx` 等推理/训练产物，避免大文件意外入库。
 - **temp/ 中有价值素材**已提升到 `scripts/data-conversion/`（`convert_ocr_from_txt.py`、

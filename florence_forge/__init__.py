@@ -101,7 +101,7 @@ __all__ = [
 ]
 
 _LAZY_EXPORTS = {
-    "Trainer": ("florence_forge.training.trainer", "MultiTaskTrainer"),
+    "Trainer": ("florence_forge.training.trainer_refactored", "MultiTaskTrainer"),
     "TrainerV2": ("florence_forge.training.trainer_refactored", "MultiTaskTrainer"),
     "MultiDatasetManager": ("florence_forge.data.multi_dataset_manager", "MultiDatasetManager"),
     "DatasetInfo": ("florence_forge.data.multi_dataset_manager", "DatasetInfo"),

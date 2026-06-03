@@ -140,17 +140,16 @@ class DeviceConfigurator:
             from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
             from torch.distributed.fsdp import ShardingStrategy
             
-            # 映射分片策略
             sharding_strategy_map = {
                 "full_shard": ShardingStrategy.FULL_SHARD,
                 "shard_grad_op": ShardingStrategy.SHARD_GRAD_OP,
                 "no_shard": ShardingStrategy.NO_SHARD,
                 "hybrid_shard": ShardingStrategy.HYBRID_SHARD,
             }
-            
+            strategy_key = str(dist_config.fsdp_sharding_strategy).lower()
             sharding_strategy = sharding_strategy_map.get(
-                dist_config.fsdp_sharding_strategy,
-                ShardingStrategy.FULL_SHARD
+                strategy_key,
+                ShardingStrategy.FULL_SHARD,
             )
             
             fsdp_plugin = FullyShardedDataParallelPlugin(

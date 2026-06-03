@@ -24,7 +24,8 @@ from ..core.config import TrainingConfig
 from ..data.multi_dataset_manager import MultiDatasetManager
 from ..data.dataset import MultiTaskDataset
 from ..data.loader import TaskDataLoader
-from .trainer import MultiTaskTrainer
+from .trainer_refactored import MultiTaskTrainer
+from . import trainer_step_metrics
 from .scheduler import TaskScheduler
 from .gradient_validator import GradientValidator, GradientValidationConfig
 from .memory_monitor import MemoryMonitor, MemoryMonitorConfig
@@ -155,7 +156,8 @@ class MultiDatasetTrainer(MultiTaskTrainer):
         
         # 调用父类设置
         super().setup_training()
-        
+        trainer_step_metrics.init_step_metrics_state(self)
+
         # 初始化数据集权重
         self._initialize_dataset_weights()
         
@@ -251,27 +253,28 @@ class MultiDatasetTrainer(MultiTaskTrainer):
             self._record_dataset_performance(dataset_name, task_type, loss.item())
             
             # 记录步骤指标
+            step = self.training_loop.global_step
             should_log = (
-                self.global_step % self.config.logging_steps == 0 or
-                self.global_step == 1 or
-                (self.global_step % max(1, len(self.train_dataloader) // 3) == 0)
+                step % self.config.logging_steps == 0
+                or step == 0
+                or (step % max(1, len(self.train_dataloader) // 3) == 0)
             )
             if should_log:
                 grad_norm = self._calculate_grad_norm()
                 self._record_step_metrics(
-                    step=self.global_step,
+                    step=step,
                     epoch=self.current_epoch,
                     task_type=task_type,
                     loss=loss.item(),
                     learning_rate=current_lr,
                     grad_norm=grad_norm,
                     time_per_step=step_time,
-                    dataset_name=dataset_name
+                    dataset_name=dataset_name,
                 )
                 if self.accelerator.is_local_main_process:
                     logger.info(
                         format_training_step(
-                            completed_step=self.global_step + 1,
+                            completed_step=step + 1,
                             total_steps=total_steps,
                             epoch=self.current_epoch + 1,
                             total_epochs=self.config.num_epochs,
@@ -301,10 +304,10 @@ class MultiDatasetTrainer(MultiTaskTrainer):
             dataset_metrics[dataset_name]['loss'].append(loss.item())
             dataset_metrics[dataset_name][task_type].append(loss.item())
             
-            self.global_step += 1
-            
-            # 检查是否达到最大步数
-            if self.config.max_steps and self.global_step >= self.config.max_steps:
+            self.training_loop.global_step += 1
+            self.global_step = self.training_loop.global_step
+
+            if self.training_loop._max_steps_reached():
                 break
         
         # 计算epoch平均指标
@@ -424,9 +427,15 @@ class MultiDatasetTrainer(MultiTaskTrainer):
         dataset_name: str = "unknown"
     ) -> None:
         """记录步骤指标（扩展版本）"""
-        # 调用父类方法
-        super()._record_step_metrics(
-            step, epoch, task_type, loss, learning_rate, grad_norm, time_per_step
+        trainer_step_metrics.record_step_metrics(
+            self,
+            step=step,
+            epoch=epoch,
+            task_type=task_type,
+            loss=loss,
+            learning_rate=learning_rate,
+            grad_norm=grad_norm,
+            time_per_step=time_per_step,
         )
         
         # 记录数据集特定指标
@@ -536,27 +545,67 @@ class MultiDatasetTrainer(MultiTaskTrainer):
         logger.info(f"数据集性能信息已保存到: {file_path}")
     
     def train(self) -> Dict[str, Any]:
-        """开始训练（重写父类方法）
-        
-        Returns:
-            训练结果字典
-        """
+        """开始训练（多数据集专用循环，使用自定义 ``_train_epoch``）。"""
         logger.info("[data] preparing multi-dataset training configuration")
-        
-        # 保存数据集配置
+
+        if self.optimizer is None:
+            self.setup_training()
+
         config_path = self.output_dir / "dataset_config.json"
         self.dataset_manager.save_configuration(config_path)
-        
-        # 调用父类训练方法
-        result = super().train()
-        
-        # 保存数据集性能信息
+
+        if self.callback_manager:
+            self.callback_manager.on_train_begin()
+
+        try:
+            for epoch in range(self.config.num_epochs):
+                self.current_epoch = epoch
+                train_metrics = self._train_epoch()
+
+                val_metrics = None
+                if self.val_dataloader is not None:
+                    val_metrics = self.training_loop.validate_epoch(
+                        val_dataloader=self.val_dataloader,
+                        epoch=epoch,
+                    )
+
+                is_best = False
+                if val_metrics and "val_loss" in val_metrics:
+                    is_best = val_metrics["val_loss"] < self.best_metric
+                    if is_best:
+                        self.best_metric = val_metrics["val_loss"]
+
+                self.checkpoint_manager.save_checkpoint(
+                    epoch=epoch,
+                    optimizer=self.optimizer,
+                    lr_scheduler=self.lr_scheduler,
+                    metrics={**train_metrics, **(val_metrics or {})},
+                    is_best=is_best,
+                )
+
+                if val_metrics and self.config.early_stopping_patience > 0:
+                    if self.training_loop.should_early_stop(
+                        current_metric=val_metrics.get("val_loss", float("inf")),
+                        patience=self.config.early_stopping_patience,
+                    ):
+                        logger.info("🛑 多数据集训练触发早停")
+                        break
+
+                if self.training_loop._max_steps_reached():
+                    break
+        finally:
+            if self.callback_manager:
+                self.callback_manager.on_train_end()
+            trainer_step_metrics.flush_csv_buffer(self)
+            self.checkpoint_manager.save_final_model(
+                merge_lora=self.config.use_lora,
+                lora_manager=self.lora_manager,
+            )
+
         self.save_dataset_performance()
-        
-        # 添加数据集特定的结果
+        result = self._get_training_summary()
         result["dataset_performance"] = self.get_dataset_performance_summary()
         result["dataset_statistics"] = self.dataset_manager.get_dataset_statistics()
-        
         return result
     
     @classmethod

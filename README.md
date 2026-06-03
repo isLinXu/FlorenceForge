@@ -89,17 +89,18 @@ florence_forge_cli train \
   --train-data data.jsonl \
   --epochs 5
 
-# 4. 使用模块化 v2 训练栈
+# 4. （可选）显式使用遗留 v1 训练栈
 florence_forge_cli train \
   --config my_config.yaml \
   --train-data data.jsonl \
-  --trainer-version v2
+  --trainer-version v1
 ```
 
-v1 当前仍是兼容默认值。若旧脚本需要临时静默 v1 迁移提示：
+**v2 为 CLI 与 `from florence_forge.training import MultiTaskTrainer` 的默认训练栈**（v1.2.0）。
+若旧脚本仍走 v1 模块并需静默迁移提示：
 
 ```bash
-FLORENCE_FORGE_DISABLE_V1_TRAINER_WARNING=1 florence_forge_cli train --config my_config.yaml
+FLORENCE_FORGE_DISABLE_V1_TRAINER_WARNING=1 florence_forge_cli train --config my_config.yaml --trainer-version v1
 ```
 
 ### coco128 LoRA 训练
@@ -145,7 +146,7 @@ florence_forge_cli train \
 from florence_forge import TrainingConfig
 from florence_forge.core.model import Florence2MultiTaskModel
 from florence_forge.data.dataset import MultiTaskDataset
-from florence_forge.training import MultiTaskTrainer, MultiTaskTrainerV2
+from florence_forge.training import MultiTaskTrainer, MultiTaskTrainerV1
 
 config = TrainingConfig.from_yaml("my_config.yaml")
 
@@ -163,15 +164,15 @@ train_dataset = MultiTaskDataset(
     processor=model.processor,
 )
 
-# v1 兼容训练栈
+# v2 模块化训练栈（默认导出）
 trainer = MultiTaskTrainer(
     model=model,
     train_dataset=train_dataset,
     config=config,
 )
 
-# v2 模块化训练栈可替换为：
-# trainer = MultiTaskTrainerV2(model=model, train_dataset=train_dataset, config=config)
+# 遗留 v1 单文件栈：
+# trainer = MultiTaskTrainerV1(model=model, train_dataset=train_dataset, config=config)
 
 results = trainer.train()
 print(results)
@@ -262,8 +263,8 @@ florence_forge_cli train --config config.yaml --resume outputs/checkpoint-1000
 # 分布式训练
 accelerate launch --multi_gpu florence_forge_cli train --config config.yaml
 
-# 选择 v2 训练栈
-florence_forge_cli train --config config.yaml --trainer-version v2
+# 选择遗留 v1 训练栈
+florence_forge_cli train --config config.yaml --trainer-version v1
 ```
 
 ### 评估
@@ -428,10 +429,10 @@ backend = create_backend("florence-2", config.model_settings)
 ### 训练器
 
 ```python
-from florence_forge.training import MultiTaskTrainer, MultiTaskTrainerV2
+from florence_forge.training import MultiTaskTrainer, MultiTaskTrainerV1
 
-trainer_v1 = MultiTaskTrainer(model=model, train_dataset=train_dataset, config=config)
-trainer_v2 = MultiTaskTrainerV2(model=model, train_dataset=train_dataset, config=config)
+trainer_v2 = MultiTaskTrainer(model=model, train_dataset=train_dataset, config=config)
+trainer_v1 = MultiTaskTrainerV1(model=model, train_dataset=train_dataset, config=config)
 ```
 
 ### 评估器
