@@ -48,6 +48,13 @@ def build_prompt_and_answer(
     return prompt, sample.suffix
 
 
+def supervised_label_count(labels: torch.Tensor) -> int:
+    """统计 labels 中参与 loss 的 token 数（非 -100）。"""
+    if not isinstance(labels, torch.Tensor):
+        return 0
+    return int((labels != -100).sum().item())
+
+
 def default_prepare_labels(
     encoded_prompt: Dict[str, torch.Tensor],
     encoded_full: Dict[str, torch.Tensor],
@@ -68,6 +75,10 @@ def default_prepare_labels(
     labels = torch.full_like(full_ids, -100)
     if len(full_ids) > prompt_length:
         labels[prompt_length:] = full_ids[prompt_length:]
+    if supervised_label_count(labels) == 0:
+        logger.warning(
+            "样本无有效监督 token（answer 可能为空或过短）；请检查 JSONL 的 suffix/caption 字段"
+        )
     return labels
 
 
