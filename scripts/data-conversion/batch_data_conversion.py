@@ -7,6 +7,7 @@ Florence Forge 批量数据转换工作流程脚本
 """
 
 import sys
+import os
 import json
 import yaml
 import logging
@@ -14,6 +15,11 @@ import subprocess
 import argparse
 from datetime import datetime
 import random
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(PROJECT_ROOT))
 
 # 设置日志
 def setup_logging(config: Dict[str, Any]):
@@ -78,12 +84,19 @@ class DataConversionWorkflow:
         self.logger.debug(f"命令: {' '.join(cmd)}")
         
         try:
+            env = os.environ.copy()
+            env["PYTHONPATH"] = (
+                str(PROJECT_ROOT)
+                if not env.get("PYTHONPATH")
+                else str(PROJECT_ROOT) + os.pathsep + env["PYTHONPATH"]
+            )
             result = subprocess.run(
                 cmd, 
                 capture_output=True, 
                 text=True, 
                 check=True,
-                timeout=3600  # 1小时超时
+                timeout=3600,  # 1小时超时
+                env=env,
             )
             
             self.logger.info(f"✅ {description} 成功完成")
@@ -144,7 +157,7 @@ class DataConversionWorkflow:
     def convert_yolo_data(self, config: Dict[str, Any]) -> bool:
         """转换YOLO格式数据"""
         cmd = [
-            'florence_forge_cli', 'convert', 'yolo',
+            sys.executable, '-m', 'florence_forge.cli.main', 'convert', 'yolo',
             '--labels-dir', config['labels_dir'],
             '--images-dir', config['images_dir'],
             '--classes-file', config['classes_file'],
@@ -158,7 +171,7 @@ class DataConversionWorkflow:
     def convert_coco_data(self, config: Dict[str, Any]) -> bool:
         """转换COCO格式数据"""
         cmd = [
-            'florence_forge_cli', 'convert', 'coco',
+            sys.executable, '-m', 'florence_forge.cli.main', 'convert', 'coco',
             '--json-file', config['json_file'],
             '--images-dir', config['images_dir'],
             '--output', config['output_file']
@@ -169,7 +182,7 @@ class DataConversionWorkflow:
     def convert_csv_data(self, config: Dict[str, Any]) -> bool:
         """转换CSV格式数据"""
         cmd = [
-            'florence_forge_cli', 'convert', 'csv',
+            sys.executable, '-m', 'florence_forge.cli.main', 'convert', 'csv',
             '--csv-file', config['csv_file'],
             '--output', config['output_file'],
             '--image-column', config.get('image_column', 'image_path'),
@@ -182,7 +195,7 @@ class DataConversionWorkflow:
     def convert_xml_data(self, config: Dict[str, Any]) -> bool:
         """转换VOC XML格式数据"""
         cmd = [
-            'florence_forge_cli', 'convert', 'xml',
+            sys.executable, '-m', 'florence_forge.cli.main', 'convert', 'xml',
             '--xml-dir', config['xml_dir'],
             '--images-dir', config['images_dir'],
             '--output', config['output_file']
@@ -193,7 +206,7 @@ class DataConversionWorkflow:
     def convert_ocr_data(self, config: Dict[str, Any]) -> bool:
         """转换OCR数据"""
         cmd = [
-            'florence_forge_cli', 'convert', 'ocr',
+            sys.executable, '-m', 'florence_forge.cli.main', 'convert', 'ocr',
             '--images-dir', config['images_dir'],
             '--texts-dir', config['texts_dir'],
             '--output', config['output_file'],
