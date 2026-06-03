@@ -315,7 +315,12 @@ class Florence2Backend(BaseVLMBackend):
         for i in range(labels.shape[0]):
             p_len = int(prompt_lengths[i].item())
             labels[i, :p_len] = -100
-        return labels.squeeze(0) if labels.shape[0] == 1 else labels
+        result = labels.squeeze(0) if labels.shape[0] == 1 else labels
+        if (result != -100).sum().item() == 0:
+            logger.warning(
+                "Florence-2 样本无有效监督 token；请提供非空 answer/suffix（caption 不宜过短）"
+            )
+        return result
 
 
 # 注册后端

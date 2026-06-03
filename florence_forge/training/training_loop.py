@@ -25,6 +25,13 @@ from ..utils.training_logging import (
 logger = logging.getLogger(__name__)
 
 
+def supervised_label_count(labels: torch.Tensor) -> int:
+    """Count label tokens that participate in the loss."""
+    if not isinstance(labels, torch.Tensor):
+        return 0
+    return int((labels != -100).sum().item())
+
+
 class TrainingLoop:
     """训练循环管理器
     
@@ -122,12 +129,29 @@ class TrainingLoop:
                 logger.warning("Batch %s has no labels; skipping training step", batch_idx)
                 optimizer.zero_grad()
                 continue
+            if supervised_label_count(labels) == 0:
+                logger.warning(
+                    "Batch %s 无有效监督 token（labels 全为 -100）；"
+                    "请检查 caption/suffix 是否为空或过短",
+                    batch_idx,
+                )
+                optimizer.zero_grad()
+                continue
 
             accelerator_handles_accumulation = self._accelerator_handles_accumulation()
             
             with self.accelerator.accumulate(self.model) if self.accelerator else torch.enable_grad():
                 outputs = self.model(**model_inputs)
                 loss = outputs.loss if hasattr(outputs, 'loss') else outputs['loss']
+                if not torch.isfinite(loss).all():
+                    logger.warning(
+                        "Batch %s loss 非有限值 (%s)；已跳过反传。"
+                        "MPS 上可关闭 use_fp16；单样本训练请使用更长的 caption suffix",
+                        batch_idx,
+                        loss.detach().float().mean().item(),
+                    )
+                    optimizer.zero_grad()
+                    continue
                 
                 # 原生 PyTorch 路径需要手动缩放；Accelerate 会在 backward 中处理。
                 if not accelerator_handles_accumulation and self.config.gradient_accumulation_steps > 1:
