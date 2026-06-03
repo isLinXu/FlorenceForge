@@ -20,6 +20,26 @@ def _has_accelerate() -> bool:
         return False
 
 
+class TestMpsMixedPrecision:
+    def test_mps_uses_fp32_when_only_bf16_enabled(self):
+        config = TrainingConfig(device="mps", use_bf16=True, use_fp16=False)
+        dc = DeviceConfigurator(config)
+        dc.device_type = "mps"
+        assert dc.determine_mixed_precision() == "no"
+
+    def test_mps_uses_fp16_only_when_use_fp16_explicit(self):
+        config = TrainingConfig(device="mps", use_bf16=False, use_fp16=True)
+        dc = DeviceConfigurator(config)
+        dc.device_type = "mps"
+        assert dc.determine_mixed_precision() == "fp16"
+
+    def test_mps_fp32_when_amp_flags_disabled(self):
+        config = TrainingConfig(device="mps", use_bf16=False, use_fp16=False)
+        dc = DeviceConfigurator(config)
+        dc.device_type = "mps"
+        assert dc.determine_mixed_precision() == "no"
+
+
 class TestDeviceConfiguratorDistributed:
     def test_build_fsdp_plugin_when_accelerate_available(self):
         if not _has_accelerate():
