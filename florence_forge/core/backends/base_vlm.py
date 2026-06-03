@@ -204,10 +204,12 @@ class BaseVLMBackend(ABC, nn.Module):
             kwargs["revision"] = revision
 
         device_map = getattr(self.config, "device_map", "auto")
-        if device == "cpu":
+        if device in ("cpu", "mps") or not device_map or str(device_map).lower() in (
+            "none",
+            "null",
+        ):
             kwargs["device_map"] = None
-        elif device == "mps":
-            kwargs["device_map"] = None
+            kwargs["low_cpu_mem_usage"] = False
         else:
             kwargs["device_map"] = device_map
 
