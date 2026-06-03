@@ -65,46 +65,45 @@ class DeviceConfigurator:
             logger.info(f"使用配置指定的混合精度：{self.config.mixed_precision}")
             return self.config.mixed_precision
         
-        # 自动检测
         device_type = self.device_type or self.setup_device()
-        
-        # CUDA 设备：检测 BF16 支持
+        use_bf16 = bool(getattr(self.config, "use_bf16", False))
+        use_fp16 = bool(getattr(self.config, "use_fp16", False))
+
+        if not use_bf16 and not use_fp16:
+            logger.info("配置未启用混合精度（use_fp16/use_bf16 均为 false），使用 FP32")
+            return "no"
+
+        # CUDA：按架构与配置选择 BF16/FP16
         if device_type == "cuda":
             try:
-                # Ampere (SM80+) 及以上架构支持 BF16
-                compute_capability = torch.cuda.get_device_capability()
-                major, minor = compute_capability
-                
-                if major >= 8:  # A100, A6000, RTX 30xx/40xx
-                    logger.info(f"✅ 检测到 Ampere+ 架构（SM{major}{minor}），使用 BF16")
+                major, minor = torch.cuda.get_device_capability()
+                if use_bf16 and major >= 8:
+                    logger.info("CUDA Ampere+ 架构，使用 BF16")
                     return "bf16"
-                else:  # V100, T4, RTX 20xx
-                    logger.info(f"✅ 检测到 CUDA 设备（SM{major}{minor}），使用 FP16")
+                if use_fp16 or not use_bf16:
+                    logger.info("CUDA 设备，使用 FP16")
                     return "fp16"
-            except Exception as e:
-                logger.warning(f"⚠️  CUDA 架构检测失败，降级到 FP16：{e}")
+            except Exception as exc:
+                logger.warning("CUDA 架构检测失败，降级到 FP16：%s", exc)
+            return "fp16"
+
+        # MPS：Florence-2 + LoRA 在 FP16 下易出现 loss=nan，默认 FP32
+        if device_type == "mps":
+            if use_fp16:
+                logger.warning(
+                    "MPS 已启用 FP16 混合精度；若出现 loss=nan，请关闭 use_fp16 或设置 mixed_precision: no"
+                )
                 return "fp16"
-        
-        # MPS 设备：PyTorch 2.0+ 支持 FP16
-        elif device_type == "mps":
-            try:
-                pytorch_version = torch.__version__.split('+')[0]
-                major, minor = map(int, pytorch_version.split('.')[:2])
-                
-                if major >= 2:
-                    logger.info("✅ PyTorch 2.0+，MPS 支持 FP16")
-                    return "fp16"
-                else:
-                    logger.warning("⚠️  PyTorch < 2.0，MPS 不支持混合精度")
-                    return "no"
-            except Exception as e:
-                logger.warning(f"⚠️  PyTorch 版本检测失败：{e}")
-                return "no"
-        
-        # CPU：不支持混合精度
-        else:
-            logger.info("CPU 设备，不使用混合精度")
+            if use_bf16:
+                logger.info(
+                    "MPS 上忽略 use_bf16，使用 FP32 全精度（Apple Silicon 上更稳定）"
+                )
+            else:
+                logger.info("MPS 使用 FP32 全精度训练")
             return "no"
+
+        logger.info("CPU 设备，不使用混合精度")
+        return "no"
     
     def build_distributed_plugin(self, dist_config):
         """构建分布式训练插件
