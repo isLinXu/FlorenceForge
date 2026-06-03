@@ -632,6 +632,23 @@ def run_training_task(
         if training_config.train_data_path and not Path(training_config.train_data_path).exists():
             logger.warning(f"⚠️ 训练数据路径不存在: {training_config.train_data_path}")
 
+        # 优先使用本地 HF 缓存快照，避免无网络或 meta-tensor 加载异常
+        model_name = training_config.model_settings.model_name
+        if "/" in model_name and not Path(model_name).exists():
+            try:
+                from florence_forge.utils.diagnostics import find_local_hf_snapshot
+
+                snapshot = find_local_hf_snapshot(model_name)
+                if snapshot is not None:
+                    logger.info("使用本地 Hugging Face 缓存: %s", snapshot)
+                    training_config.model_settings.model_name = str(snapshot)
+            except Exception as exc:
+                logger.debug("本地模型快照解析跳过: %s", exc)
+
+        target_device = training_config.model_settings.device or training_config.device
+        if target_device in ("mps", "cpu"):
+            training_config.model_settings.device_map = None
+
         # 初始化模型（延迟加载模式，需显式调用 load()）
         logger.info("🤖 初始化模型...")
         model = Florence2MultiTaskModel(training_config.model_settings)
@@ -682,8 +699,23 @@ def run_training_task(
         return False
 
 
+def _coerce_override_value(value: Any) -> Any:
+    """将 CLI --override 字符串转为合适的 Python 值。"""
+    if not isinstance(value, str):
+        return value
+    lowered = value.strip().lower()
+    if lowered in ("null", "none", ""):
+        return None
+    if lowered in ("true", "yes", "1"):
+        return True
+    if lowered in ("false", "no", "0"):
+        return False
+    return value
+
+
 def _set_nested_attr(obj, attr_str, value):
     """递归设置对象的嵌套属性"""
+    value = _coerce_override_value(value)
     alias_map = {
         "model_config": "model_settings",
         "data_config": "data_settings",
@@ -728,9 +760,21 @@ def _apply_config_overrides(config: 'TrainingConfig', overrides: Dict[str, Any])
             config.model_settings.model_name = overrides['model']
             logger.info(f"覆盖模型名称: {config.model_settings.model_name}")
 
+        if 'train_data' in overrides and overrides['train_data'] is not None:
+            config.train_data_path = overrides['train_data']
+            logger.info(f"覆盖训练数据路径: {config.train_data_path}")
+
         if 'train_data_path' in overrides and overrides['train_data_path'] is not None:
             config.train_data_path = overrides['train_data_path']
             logger.info(f"覆盖训练数据路径: {config.train_data_path}")
+
+        if 'val_data' in overrides and overrides['val_data'] is not None:
+            config.val_data_path = overrides['val_data']
+            logger.info(f"覆盖验证数据路径: {config.val_data_path}")
+
+        if 'max_steps' in overrides and overrides['max_steps'] is not None:
+            config.max_steps = int(overrides['max_steps'])
+            logger.info(f"覆盖 max_steps: {config.max_steps}")
 
         if 'val_data_path' in overrides and overrides['val_data_path'] is not None:
             config.val_data_path = overrides['val_data_path']
@@ -746,13 +790,31 @@ def _apply_config_overrides(config: 'TrainingConfig', overrides: Dict[str, Any])
         for key, value in overrides.items():
             if '.' in key and value is not None:
                 try:
-                    _set_nested_attr(config, key, value)
+                    _set_nested_attr(config, key, _coerce_override_value(value))
                     logger.info(f"覆盖配置: {key} = {value}")
                 except AttributeError:
                     logger.warning(f"无法设置配置属性: {key}")
 
     except Exception as e:
         logger.warning(f"应用配置覆盖时出错: {e}")
+
+
+def _resolve_image_base_path(
+    config: "TrainingConfig", data_path: Optional[str] = None
+) -> str:
+    """从配置或 JSONL 路径推断图像根目录。"""
+    explicit = getattr(config, "image_base_path", None)
+    if explicit:
+        return str(explicit)
+
+    candidate_path = data_path or config.train_data_path
+    if candidate_path:
+        parent = Path(candidate_path).expanduser().resolve().parent
+        images_dir = parent / "images"
+        if images_dir.is_dir():
+            return str(images_dir)
+        return str(parent)
+    return "./data/images"
 
 
 def _prepare_datasets(
@@ -813,9 +875,11 @@ def _prepare_datasets(
             logger.info(f"复用模型 backend: {type(backend).__name__}")
 
         # 创建训练数据集
+        image_base = _resolve_image_base_path(config, config.train_data_path)
+        logger.info("图像基础路径: %s", image_base)
         train_dataset = MultiTaskDataset(
             data_configs=data_configs,
-            image_base_path="./data/images",
+            image_base_path=image_base,
             config=config.data_settings,
             processor=processor,
             backend=backend,
@@ -834,9 +898,10 @@ def _prepare_datasets(
                     "weight": config.task_weights.get(task, 1.0)
                 })
 
+            val_image_base = _resolve_image_base_path(config, config.val_data_path)
             val_dataset = MultiTaskDataset(
                 data_configs=val_data_configs,
-                image_base_path="./data/images",
+                image_base_path=val_image_base,
                 config=config.data_settings,
                 processor=processor,
                 backend=backend,

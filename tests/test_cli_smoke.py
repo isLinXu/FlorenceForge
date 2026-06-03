@@ -108,6 +108,15 @@ def test_list_tasks_subprocess_exits_zero():
     assert result.returncode == 0
 
 
+def test_training_config_exposes_nested_fields():
+    from florence_forge.core.config import TrainingConfig
+
+    cfg = TrainingConfig()
+    assert cfg.num_workers == cfg.data_settings.num_workers
+    assert cfg.weight_decay == cfg.optimization_settings.weight_decay
+    assert cfg.use_lora == cfg.model_settings.use_lora
+
+
 def test_doctor_help_subprocess_exits_zero():
     result = subprocess.run(
         [sys.executable, "-m", "florence_forge.cli.main", "doctor", "--help"],
@@ -116,3 +125,17 @@ def test_doctor_help_subprocess_exits_zero():
         timeout=30,
     )
     assert result.returncode == 0
+
+
+def test_resolve_image_base_path_from_jsonl_parent(tmp_path):
+    from florence_forge.cli.commands import _resolve_image_base_path
+    from florence_forge.core.config import TrainingConfig
+
+    images = tmp_path / "images"
+    images.mkdir()
+    jsonl = tmp_path / "caption.jsonl"
+    jsonl.write_text("{}\n", encoding="utf-8")
+
+    config = TrainingConfig(train_data_path=str(jsonl))
+    assert _resolve_image_base_path(config) == str(images)
+
