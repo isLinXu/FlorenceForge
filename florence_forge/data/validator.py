@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Union
 
 from PIL import Image
+from tqdm.auto import tqdm
 
 logger = logging.getLogger(__name__)
 
@@ -322,6 +323,96 @@ class DataValidator:
         self.validation_results = []
         self.error_count = 0
         self.warning_count = 0
+
+    @staticmethod
+    def validate_florence2_jsonl(
+        jsonl_path: str,
+        image_base_path: str = "",
+    ) -> Dict[str, Any]:
+        """验证 Florence-2 JSONL 格式数据（静态入口，供转换管线使用）。"""
+        logger.info("验证JSONL数据: %s", jsonl_path)
+        jsonl_path = Path(jsonl_path).absolute()
+        image_base_path = (
+            Path(image_base_path).absolute() if image_base_path else Path()
+        )
+
+        report: Dict[str, Any] = {
+            "total_samples": 0,
+            "valid_samples": 0,
+            "invalid_samples": 0,
+            "missing_images": 0,
+            "task_distribution": {},
+            "errors": [],
+        }
+
+        with open(jsonl_path, "r", encoding="utf-8") as handle:
+            for line_num, line in enumerate(tqdm(handle, desc="验证JSONL进度"), 1):
+                report["total_samples"] += 1
+                try:
+                    data = json.loads(line.strip())
+                    for field in ("image", "prefix", "suffix"):
+                        if field not in data:
+                            report["errors"].append(
+                                f"第{line_num}行: 缺少字段 '{field}'"
+                            )
+                            continue
+
+                    image_path = Path(data["image"])
+                    if not image_path.exists():
+                        report["missing_images"] += 1
+                        report["errors"].append(
+                            f"第{line_num}行: 图像文件不存在 '{image_path}'"
+                        )
+
+                    for field in ("label_file", "txt_file", "xml_file", "mask_dir"):
+                        if field in data and not Path(data[field]).exists():
+                            report["errors"].append(
+                                f"第{line_num}行: 标签文件不存在 '{data[field]}'"
+                            )
+
+                    task_type = data["prefix"].strip("<>")
+                    report["task_distribution"][task_type] = (
+                        report["task_distribution"].get(task_type, 0) + 1
+                    )
+                    report["valid_samples"] += 1
+                except json.JSONDecodeError as exc:
+                    report["invalid_samples"] += 1
+                    report["errors"].append(f"第{line_num}行: JSON解析错误 - {exc}")
+                except Exception as exc:
+                    report["invalid_samples"] += 1
+                    report["errors"].append(f"第{line_num}行: 验证错误 - {exc}")
+
+        logger.info(
+            "验证完成: 总计%s样本，有效%s，无效%s",
+            report["total_samples"],
+            report["valid_samples"],
+            report["invalid_samples"],
+        )
+        return report
+
+    @staticmethod
+    def generate_validation_report(report: Dict[str, Any], output_path: str) -> None:
+        """将 ``validate_florence2_jsonl`` 结果写入 Markdown 报告。"""
+        output_path = Path(output_path).absolute()
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        with open(output_path, "w", encoding="utf-8") as handle:
+            handle.write("# 数据验证报告\n\n")
+            handle.write(f"- **总样本数**: {report['total_samples']}\n")
+            handle.write(f"- **有效样本数**: {report['valid_samples']}\n")
+            handle.write(f"- **无效样本数**: {report['invalid_samples']}\n")
+            handle.write(f"- **缺失图像数**: {report['missing_images']}\n\n")
+            handle.write("## 任务分布\n\n")
+            for task, count in report["task_distribution"].items():
+                handle.write(f"- **{task}**: {count} 样本\n")
+            if report["errors"]:
+                handle.write("\n## 错误详情\n\n")
+                for error in report["errors"][:100]:
+                    handle.write(f"- {error}\n")
+                if len(report["errors"]) > 100:
+                    handle.write(
+                        f"\n... 还有 {len(report['errors']) - 100} 个错误未显示\n"
+                    )
 
 
 def validate_data_format(

@@ -49,7 +49,15 @@ class Florence2Collator:
             )
 
         # 分离张量字段与非张量字段
-        tensor_keys = ["input_ids", "attention_mask", "pixel_values", "labels"]
+        tensor_keys = [
+            "input_ids",
+            "attention_mask",
+            "pixel_values",
+            "labels",
+            "token_type_ids",
+            "position_ids",
+            "mm_token_type_ids",
+        ]
         non_tensor_keys = ["task_type", "weight", "metadata", "prompt", "answer"]
 
         collated: Dict[str, Any] = {}
@@ -82,19 +90,25 @@ class Florence2Collator:
             if "input_ids" in collated:
                 collated["labels"] = collated["input_ids"].clone()
 
-        # ---- 4. 处理 pixel_values（直接 stack） ----
+        # ---- 4. 处理可选序列张量（PaliGemma 等 decoder-only VLM 可能返回） ----
+        for key in ("token_type_ids", "position_ids", "mm_token_type_ids"):
+            if all(sample.get(key) is not None for sample in batch):
+                tensor_list = [sample[key] for sample in batch]
+                collated[key] = self._pad_sequence(tensor_list, pad_value=0)
+
+        # ---- 5. 处理 pixel_values（直接 stack） ----
         if all(sample.get("pixel_values") is not None for sample in batch):
             pixel_values_list = [sample["pixel_values"] for sample in batch]
             # Dataset __getitem__ 已确保 pixel_values 是张量，直接 stack
             collated["pixel_values"] = torch.stack(pixel_values_list, dim=0)
 
-        # ---- 5. 收集非张量字段为列表 ----
+        # ---- 6. 收集非张量字段为列表 ----
         for key in non_tensor_keys:
             values = [sample.get(key) for sample in batch]
             if any(v is not None for v in values):
                 collated[key] = values
 
-        # ---- 6. 任务类型快捷访问 ----
+        # ---- 7. 任务类型快捷访问 ----
         if "task_type" in collated:
             task_types = collated["task_type"]
             collated["task_types"] = task_types
