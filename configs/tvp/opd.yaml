@@ -1,0 +1,53 @@
+# TVP Stage 2: On-Policy Distillation
+# =====================================
+# Distill expert models (ETwG + ETwP) into a single unified student.
+# Requires simultaneous loading of student + teachers — high VRAM pressure.
+# Use batch_size=1 and gradient accumulation for 24G GPUs.
+
+student_model: "outputs/tvp/sft/final"
+teacher_models:
+  - "outputs/tvp/expert_grounding/final"   # ETwG: expert for grounding/counting
+  - "outputs/tvp/expert_navigation/final" # ETwP: expert for maze/path
+teacher_weights:
+  - 0.5
+  - 0.5
+
+freeze_vision_tower: true
+freeze_llm: false
+torch_dtype: "bfloat16"
+
+load_in_4bit: false
+load_in_8bit: false
+
+datasets:
+  - path: "data/sft/counting/counting_cot_data.jsonl"
+    image_root: "data/coco/val/images"
+    task_type: "counting"
+    weight: 1.0
+  - path: "data/sft/spatial/spatial_data.jsonl"
+    image_root: "data/sft/spatial/images"
+    task_type: "spatial"
+    weight: 1.0
+  - path: "data/sft/maze/maze_data.jsonl"
+    image_root: "data/sft/maze"
+    task_type: "maze"
+    weight: 1.0
+  - path: "data/sft/path/path_data.jsonl"
+    image_root: "data/sft/path"
+    task_type: "path"
+    weight: 1.0
+
+# OPD-specific hyperparameters
+temperature: 2.0
+ce_coeff: 0.1
+batch_size: 1
+gradient_accumulation_steps: 8
+epochs: 2
+learning_rate: 5.0e-7
+weight_decay: 0.01
+warmup_ratio: 0.03
+max_length: 2048
+image_size: 448
+num_workers: 2
+save_every: 1
+device: "cuda"

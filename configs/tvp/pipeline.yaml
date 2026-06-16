@@ -1,0 +1,25 @@
+# TVP Three-Stage Pipeline Configuration
+# ======================================
+# Stages: SFT → OPD → GRPO
+# Each stage feeds its checkpoint to the next.
+
+output_dir: "outputs/tvp"
+resume_from: null  # Set to stage name to resume from that stage
+
+stages:
+  - name: "sft"
+    enabled: true
+    config_path: "configs/tvp/sft.yaml"
+    checkpoint_dir: "outputs/tvp/sft"
+
+  - name: "opd"
+    enabled: true
+    config_path: "configs/tvp/opd.yaml"
+    checkpoint_dir: "outputs/tvp/opd"
+    depends_on: "sft"
+
+  - name: "grpo"
+    enabled: true
+    config_path: "configs/tvp/grpo.yaml"
+    checkpoint_dir: "outputs/tvp/grpo"
+    depends_on: "opd"
