@@ -1,0 +1,61 @@
+# TVP Stage 3: GRPO Reinforcement Learning
+# ==========================================
+# Refine the distilled model with reward-guided policy optimization.
+# GRPO loads both policy and ref_model — doubles VRAM requirement.
+# Keep batch_size small, use gradient accumulation.
+
+model_name_or_path: "outputs/tvp/opd/final"
+torch_dtype: "bfloat16"
+
+load_in_4bit: false
+load_in_8bit: false
+
+datasets:
+  - path: "data/sft/counting/counting_cot_data.jsonl"
+    image_root: "data/coco/val/images"
+    task_type: "counting"
+    weight: 1.0
+  - path: "data/sft/spatial/spatial_data.jsonl"
+    image_root: "data/sft/spatial/images"
+    task_type: "spatial"
+    weight: 1.0
+  - path: "data/sft/maze/maze_data.jsonl"
+    image_root: "data/sft/maze"
+    task_type: "maze"
+    weight: 1.0
+  - path: "data/sft/path/path_data.jsonl"
+    image_root: "data/sft/path"
+    task_type: "path"
+    weight: 1.0
+
+# GRPO hyperparameters
+group_size: 4
+kl_coeff: 0.04
+clip_eps: 0.2
+max_new_tokens: 512
+
+# Reward model configuration
+reward_models:
+  format_rm:
+    enabled: true
+    weight: 0.3
+  quality_rm:
+    enabled: true
+    weight: 0.2
+    # judge_model_path: null  # Set to use LLM-based judge
+  accuracy_rm:
+    enabled: true
+    weight: 0.5
+    task_type: "mixed"  # "counting", "spatial", "maze", "path", "mixed"
+
+batch_size: 1
+epochs: 2
+learning_rate: 1.0e-6
+weight_decay: 0.01
+max_grad_norm: 1.0
+max_length: 2048
+image_size: 448
+num_workers: 2
+
+save_every: 1
+device: "cuda"

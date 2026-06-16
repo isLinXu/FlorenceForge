@@ -1,0 +1,112 @@
+# Florence-2 视觉原语增强训练配置
+# 适用于: OD_VP, COUNT_VP, PHRASE_GROUNDING_VP
+#
+# 数据准备示例:
+#   florence_forge_cli convert vp-coco-od --json-file annotations.json --images-dir images --output data/od_vp.jsonl
+#   florence_forge_cli convert vp-coco-count --json-file annotations.json --images-dir images --output data/count_vp.jsonl
+
+# 基本训练参数
+num_epochs: 3
+max_steps: null
+eval_steps: 250
+save_steps: 500
+logging_steps: 25
+
+# 输出和日志
+output_dir: "./outputs/florence2_visual_primitives"
+logging_dir: "./outputs/florence2_visual_primitives/logs"
+
+# 混合精度训练
+use_fp16: false
+use_bf16: true
+
+# 梯度设置
+gradient_accumulation_steps: 4
+
+# 检查点管理
+save_total_limit: 3
+load_best_model_at_end: true
+metric_for_best_model: "eval_map"
+greater_is_better: true
+
+# 早停
+early_stopping_patience: 4
+early_stopping_threshold: 0.001
+
+# 实验跟踪
+experiment_name: "florence2_visual_primitive_training"
+run_name: "vp_layer1_mvp"
+tags:
+  - "florence2"
+  - "visual-primitives"
+  - "tvp"
+  - "object-grounding"
+  - "counting"
+
+# 模型配置
+model_config:
+  model_name: "microsoft/Florence-2-base"
+  trust_remote_code: true
+  torch_dtype: "auto"
+  device_map: "auto"
+  attn_implementation: "sdpa"
+  use_lora: true
+  enable_visual_primitives: true
+
+  # LoRA配置 - 使用 Florence-2 实际存在的 attention/MLP 模块名
+  lora_config:
+    r: 32
+    lora_alpha: 64
+    target_modules:
+      - "q_proj"
+      - "k_proj"
+      - "v_proj"
+      - "out_proj"
+      - "fc1"
+      - "fc2"
+    # VP special tokens 是新增词；短训阶段建议保存输出头和共享embedding，
+    # 让模型更容易从原生 <loc_*> 格式转向 <|ref|>/<|box|> 格式。
+    # 代价是adapter会从几MB增至约百MB量级。
+    modules_to_save:
+      - "lm_head"
+      - "model.shared"
+    lora_dropout: 0.05
+    bias: "none"
+    task_type: "CAUSAL_LM"
+
+# 数据配置
+data_config:
+  batch_size: 2
+  num_workers: 0
+  pin_memory: false
+  shuffle: true
+  drop_last: false
+
+  # VP坐标已经由converter归一化；MVP阶段先关闭图像增强，避免bbox同步问题
+  use_augmentation: false
+  augmentation_prob: 0.0
+
+  # 小规模验证优先，确认格式/指标闭环后再放大
+  use_balanced_sampling: true
+  max_samples_per_task: 5000
+  use_cache: false
+
+# 优化配置
+optimization_config:
+  learning_rate: 2.0e-05
+  weight_decay: 0.01
+  adam_beta1: 0.9
+  adam_beta2: 0.999
+  adam_epsilon: 1.0e-08
+  max_grad_norm: 1.0
+
+  # 学习率调度
+  lr_scheduler_type: "linear"
+  warmup_ratio: 0.05
+  warmup_steps: null
+
+# 任务调度配置
+task_scheduling_config:
+  strategy: "weighted"
+  temperature: 1.0
+  update_frequency: 100

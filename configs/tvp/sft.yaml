@@ -1,0 +1,67 @@
+# TVP Stage 1: Supervised Fine-Tuning
+# =====================================
+# Teach the model basic VP format and chain-of-thought reasoning.
+# Uses mixed SFT data covering all VP task types.
+
+model_name_or_path: "microsoft/Florence-2-base"
+torch_dtype: "bfloat16"
+
+freeze_vision_tower: true
+freeze_llm: false
+
+# Spatial compression (optional, experimental)
+use_spatial_compression: false
+compression_kernel: 3
+compression_mode: "project"
+
+datasets:
+  - path: "data/sft/od_vp/od_vp_data.jsonl"
+    image_root: "data/coco/train/images"
+    task_type: "od_vp"
+    weight: 1.0
+  - path: "data/sft/counting/counting_cot_data.jsonl"
+    image_root: "data/coco/train/images"
+    task_type: "counting"
+    weight: 1.0
+  - path: "data/sft/grounding/grounding_data.jsonl"
+    image_root: "data/coco/train/images"
+    task_type: "phrase_grounding_vp"
+    weight: 1.0
+  - path: "data/sft/spatial/spatial_data.jsonl"
+    image_root: "data/sft/spatial/images"
+    task_type: "spatial"
+    weight: 1.0
+  - path: "data/sft/maze/maze_data.jsonl"
+    image_root: "data/sft/maze"
+    task_type: "maze"
+    weight: 0.5
+  - path: "data/sft/path/path_data.jsonl"
+    image_root: "data/sft/path"
+    task_type: "path"
+    weight: 0.5
+
+batch_size: 4
+gradient_accumulation_steps: 4
+epochs: 3
+learning_rate: 2.0e-5
+weight_decay: 0.01
+warmup_ratio: 0.05
+max_length: 2048
+image_size: 448
+num_workers: 4
+
+# Curriculum learning buckets (from FlorenceForge)
+curriculum_buckets:
+  - name: "easy"
+    max_objects: 3
+    epochs: 1
+  - name: "medium"
+    max_objects: 8
+    epochs: 1
+  - name: "hard"
+    max_objects: 999
+    epochs: 1
+
+save_every: 1
+eval_every: 1
+device: "cuda"
