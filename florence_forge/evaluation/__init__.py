@@ -15,6 +15,14 @@ __all__ = [
     "MultiModalMetricsCalculator",
     "RobustnessMetricsCalculator",
     "EfficiencyMetricsCalculator",
+    "FlorenceNativeDetectionParser",
+    "StructuredVisualPrimitiveDecoder",
+    "labels_match",
+    "normalize_allowed_labels",
+    "native_detections_to_vp",
+    "resolve_structured_vp_filter_caps",
+    "filter_native_detections",
+    "VisualPrimitiveDetectionMetrics",
 ]
 
 _LAZY_EXPORTS = {
@@ -30,6 +38,14 @@ _LAZY_EXPORTS = {
     "MultiModalMetricsCalculator": ("florence_forge.evaluation.advanced_metrics", "MultiModalMetricsCalculator"),
     "RobustnessMetricsCalculator": ("florence_forge.evaluation.advanced_metrics", "RobustnessMetricsCalculator"),
     "EfficiencyMetricsCalculator": ("florence_forge.evaluation.advanced_metrics", "EfficiencyMetricsCalculator"),
+    "FlorenceNativeDetectionParser": ("florence_forge.evaluation.structured_vp_decoder", "FlorenceNativeDetectionParser"),
+    "StructuredVisualPrimitiveDecoder": ("florence_forge.evaluation.structured_vp_decoder", "StructuredVisualPrimitiveDecoder"),
+    "labels_match": ("florence_forge.evaluation.structured_vp_decoder", "labels_match"),
+    "normalize_allowed_labels": ("florence_forge.evaluation.structured_vp_decoder", "normalize_allowed_labels"),
+    "native_detections_to_vp": ("florence_forge.evaluation.structured_vp_decoder", "native_detections_to_vp"),
+    "resolve_structured_vp_filter_caps": ("florence_forge.evaluation.structured_vp_decoder", "resolve_structured_vp_filter_caps"),
+    "filter_native_detections": ("florence_forge.evaluation.structured_vp_decoder", "filter_native_detections"),
+    "VisualPrimitiveDetectionMetrics": ("florence_forge.evaluation.metrics", "VisualPrimitiveDetectionMetrics"),
 }
 
 
