@@ -1,36 +1,20 @@
-"""训练器检查点管理模块（v2 · OO 生命周期版）
+"""训练器检查点管理模块
 
-⚠️ 仓库内同时存在两个 `CheckpointManager`：
-- `checkpoint.py::CheckpointManager`（v1 函数式工具集，配套 `create_checkpoint_manager / save_model_only / load_model_only`）
-- 本文件 `checkpoint_manager.py::CheckpointManager`（v2 OO 生命周期版，供 `trainer_refactored` 使用）
-
-二者**分工明确，不要混用**：
-- 写新代码、走 v2 训练栈 → 用本文件的 `CheckpointManager`
-- 兼容旧脚本 / 仅需 save_model_only 工具 → 用 `checkpoint.py`
-
-收敛进度（v1.1.0）：两者已共用 `_checkpoint_io.py` 的底层原语
-（原子写 `atomic_torch_save`、fail-closed 加载 `load_checkpoint_file`、
-通用保留策略 `prune_checkpoints`），消除重复且易错的序列化逻辑；
-对外 API 与磁盘布局保持不变。完整合并见 `docs/v1_v2_Migration_Timeline.md`（v1.2.0）。
-
-测试覆盖：
-- `tests/test_checkpoint.py` → v1
-- `tests/test_training_integration.py` → v2
-
-提供检查点保存、加载、清理和模型合并功能
+提供训练检查点保存、加载、清理，以及 ``save_model_only`` / ``load_model_only`` 工具函数。
 """
-import os
 import json
 import logging
 import threading
+from datetime import datetime
 from pathlib import Path
-from typing import Dict, Any, Union, Optional
+from typing import Any, Dict, Optional, Union
 from concurrent.futures import ThreadPoolExecutor
 
 import torch
 import torch.nn as nn
 
 from ..core.config import TrainingConfig
+from ..utils.torch_serialization import safe_torch_load
 from ._checkpoint_io import atomic_torch_save, load_checkpoint_file, prune_checkpoints
 
 logger = logging.getLogger(__name__)
@@ -81,7 +65,8 @@ class CheckpointManager:
         lr_scheduler,
         metrics: Optional[Dict[str, float]] = None,
         is_best: bool = False,
-        async_save: bool = True
+        async_save: bool = True,
+        lora_manager=None,
     ) -> None:
         """保存检查点
         
@@ -92,6 +77,7 @@ class CheckpointManager:
             metrics: 当前指标
             is_best: 是否为最佳模型
             async_save: 是否异步保存
+            lora_manager: LoRA 管理器（可选，用于持久化 LoRA 状态）
         """
         # 如果设置了 save_best_only 且不是最佳模型，跳过
         if self.save_best_only and not is_best:
@@ -111,7 +97,8 @@ class CheckpointManager:
                 optimizer,
                 lr_scheduler,
                 metrics,
-                is_best
+                is_best,
+                lora_manager,
             )
             logger.info(f"📦 检查点保存任务已提交（异步）：{checkpoint_dir}")
         else:
@@ -122,7 +109,8 @@ class CheckpointManager:
                 optimizer,
                 lr_scheduler,
                 metrics,
-                is_best
+                is_best,
+                lora_manager,
             )
     
     def _do_save_checkpoint(
@@ -132,7 +120,8 @@ class CheckpointManager:
         optimizer: torch.optim.Optimizer,
         lr_scheduler,
         metrics: Optional[Dict[str, float]],
-        is_best: bool
+        is_best: bool,
+        lora_manager=None,
     ) -> None:
         """执行检查点保存（内部方法）
         
@@ -143,6 +132,7 @@ class CheckpointManager:
             lr_scheduler: 学习率调度器
             metrics: 当前指标
             is_best: 是否为最佳模型
+            lora_manager: LoRA 管理器（可选）
         """
         with self._saving_lock:
             checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -157,6 +147,12 @@ class CheckpointManager:
                 'config': self._config_to_dict()
             }
             
+            # 保存 LoRA 状态到检查点字典（如果提供了 lora_manager）
+            if lora_manager is not None:
+                lora_state = self._collect_lora_state(lora_manager)
+                if lora_state:
+                    checkpoint['lora_state'] = lora_state
+            
             # 保存检查点（原子写，避免崩溃残留损坏文件）
             checkpoint_path = checkpoint_dir / "checkpoint.pt"
             atomic_torch_save(checkpoint, checkpoint_path)
@@ -165,6 +161,10 @@ class CheckpointManager:
             config_path = checkpoint_dir / "config.json"
             with open(config_path, 'w', encoding='utf-8') as f:
                 json.dump(self._config_to_dict(), f, indent=2, ensure_ascii=False)
+            
+            # 保存 LoRA 状态（如果提供了 lora_manager）
+            if lora_manager is not None:
+                self.save_lora_state(lora_manager, checkpoint_dir)
             
             # 如果是最佳模型，更新记录
             if is_best:
@@ -233,7 +233,8 @@ class CheckpointManager:
         checkpoint_path: Union[str, Path],
         optimizer: Optional[torch.optim.Optimizer] = None,
         lr_scheduler: Optional[Any] = None,
-        strict: bool = True
+        strict: bool = True,
+        lora_manager=None,
     ) -> Dict[str, Any]:
         """加载检查点
         
@@ -242,6 +243,7 @@ class CheckpointManager:
             optimizer: 优化器（可选，用于恢复优化器状态）
             lr_scheduler: 学习率调度器（可选）
             strict: 是否严格匹配模型参数
+            lora_manager: LoRA 管理器（可选，用于恢复 LoRA 状态）
         
         Returns:
             检查点元数据（epoch, metrics 等）
@@ -292,13 +294,30 @@ class CheckpointManager:
         if lr_scheduler is not None and 'lr_scheduler_state_dict' in checkpoint:
             lr_scheduler.load_state_dict(checkpoint['lr_scheduler_state_dict'])
         
-        logger.info(f"✅ 检查点加载完成（Epoch {checkpoint.get('epoch', 'unknown')}）")
+        # 恢复 LoRA 状态（如果提供了 lora_manager）
+        if lora_manager is not None and checkpoint_path.is_dir():
+            self.restore_lora_state(lora_manager, checkpoint_path)
         
-        return {
+        logger.info(f"✅ 检查点加载完成（Epoch {checkpoint.get('epoch', 'unknown')}）")
+
+        metadata = {
             'epoch': checkpoint.get('epoch', 0),
             'metrics': checkpoint.get('metrics', {}),
-            'config': checkpoint.get('config', {})
+            'config': checkpoint.get('config', {}),
         }
+
+        # Include LoRA state if present in checkpoint
+        if 'lora_state' in checkpoint:
+            metadata['lora_state'] = checkpoint['lora_state']
+
+        # Also check for standalone lora_state.json file
+        if checkpoint_path.is_dir():
+            lora_json = checkpoint_path / "lora_state.json"
+            if lora_json.exists() and 'lora_state' not in metadata:
+                with open(lora_json, "r", encoding="utf-8") as f:
+                    metadata['lora_state'] = json.load(f)
+
+        return metadata
     
     def save_final_model(
         self,
@@ -316,11 +335,14 @@ class CheckpointManager:
         
         # 合并 LoRA 权重（如果需要）
         if merge_lora and lora_manager is not None:
-            logger.info("🔀 合并 LoRA 权重...")
+            logger.info("合并 LoRA 权重...")
             from .model_merger import ModelMerger
-            merger = ModelMerger(self.model, lora_manager)
-            merged_model = merger.merge_lora_weights()
-            model_to_save = merged_model
+
+            merger = ModelMerger(lora_manager)
+            model_to_merge = self.model
+            if self.accelerator is not None:
+                model_to_merge = self.accelerator.unwrap_model(self.model)
+            model_to_save = merger.merge_all_adapters(model_to_merge)
         else:
             model_to_save = self.model
         
@@ -350,3 +372,95 @@ class CheckpointManager:
         # 等待所有异步保存完成
         self._wait_for_pending_save()
         self._executor.shutdown(wait=True)
+
+    # ------------------------------------------------------------------
+    # LoRA state helpers
+    # ------------------------------------------------------------------
+
+    def _collect_lora_state(self, lora_manager) -> Dict[str, Any]:
+        """Collect serialisable LoRA state from a LoRAManager instance.
+
+        Prefers ``lora_manager.export_state()`` when available (returns a
+        plain dict suitable for JSON); falls back to extracting known
+        attributes.
+        """
+        if lora_manager is None:
+            return {}
+
+        # Preferred path: manager knows how to export itself
+        if hasattr(lora_manager, "export_state"):
+            try:
+                state = lora_manager.export_state()
+                if isinstance(state, dict):
+                    return state
+            except Exception:
+                pass
+
+        # Fallback: scrape known attributes
+        state: Dict[str, Any] = {}
+        for attr in ("active_adapters", "frozen_adapters", "shared_adapters",
+                      "task_configs", "base_config"):
+            val = getattr(lora_manager, attr, None)
+            if val is not None:
+                try:
+                    import json
+                    json.dumps(val)  # test serializability
+                    state[attr] = val
+                except (TypeError, ValueError):
+                    state[attr] = str(val)
+        return state
+
+    def save_lora_state(self, lora_manager, checkpoint_dir: Path) -> None:
+        """Persist LoRA manager state alongside a checkpoint."""
+        state = self._collect_lora_state(lora_manager)
+        if not state:
+            return
+        lora_path = checkpoint_dir / "lora_state.json"
+        with open(lora_path, "w", encoding="utf-8") as f:
+            json.dump(state, f, indent=2, ensure_ascii=False)
+        logger.info("LoRA state saved to %s", lora_path)
+
+    def restore_lora_state(self, lora_manager, checkpoint_dir: Path) -> None:
+        """Restore LoRA manager state from a checkpoint directory."""
+        lora_path = checkpoint_dir / "lora_state.json"
+        if not lora_path.exists():
+            logger.debug("No LoRA state file at %s, skipping restore", lora_path)
+            return
+        with open(lora_path, "r", encoding="utf-8") as f:
+            state = json.load(f)
+        if hasattr(lora_manager, "import_state"):
+            lora_manager.import_state(state)
+        elif hasattr(lora_manager, "load_state"):
+            lora_manager.load_state(state)
+        else:
+            logger.warning("LoRA manager has no import_state/load_state method; "
+                           "cannot restore LoRA state from checkpoint")
+        logger.info("LoRA state restored from %s", lora_path)
+
+
+def save_model_only(
+    model: nn.Module,
+    save_path: Union[str, Path],
+    metadata: Optional[Dict[str, Any]] = None,
+) -> None:
+    """仅保存模型 state_dict（原子写）。"""
+    save_data = {
+        "model_state_dict": model.state_dict(),
+        "metadata": metadata or {},
+        "timestamp": datetime.now().isoformat(),
+    }
+    atomic_torch_save(save_data, save_path)
+
+
+def load_model_only(
+    model: nn.Module,
+    load_path: Union[str, Path],
+    device: Optional[torch.device] = None,
+) -> Dict[str, Any]:
+    """仅加载模型 state_dict。"""
+    load_kwargs: Dict[str, Any] = {}
+    if device is not None:
+        load_kwargs["map_location"] = device
+    save_data = safe_torch_load(load_path, context="Model checkpoint", **load_kwargs)
+    model.load_state_dict(save_data["model_state_dict"])
+    return save_data.get("metadata", {})
