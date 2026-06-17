@@ -569,6 +569,12 @@ class TrainingConfig(WarnOnUnknownFieldsModel):
     # ---------- 检查点 ----------
     save_total_limit: int = Field(default=3, ge=1)
     keep_checkpoints: int = Field(default=3, ge=0)
+    max_checkpoints: int = Field(default=5, ge=0, description="异步检查点保留上限")
+    async_checkpoint: bool = Field(default=True, description="是否异步保存检查点")
+    activation_recompute_policy: str = Field(
+        default="off",
+        description="激活重计算 4 档策略: off / low / medium / high",
+    )
     save_best_only: bool = Field(default=False)
     load_best_model_at_end: bool = Field(default=True)
     metric_for_best_model: str = Field(default="eval_loss")
@@ -605,6 +611,16 @@ class TrainingConfig(WarnOnUnknownFieldsModel):
             warnings.warn(
                 f"device='{v}' 不是标准值，标准值为 {allowed} 或 'cuda:N' 格式",
                 stacklevel=2,
+            )
+        return v
+
+    @field_validator("activation_recompute_policy")
+    @classmethod
+    def _check_activation_recompute_policy(cls, v: str) -> str:
+        allowed = {"off", "low", "medium", "high"}
+        if v not in allowed:
+            raise ValueError(
+                f"activation_recompute_policy 必须是 {allowed} 之一，收到 '{v}'"
             )
         return v
 
