@@ -155,7 +155,39 @@ FLORENCE2_TASKS: Dict[str, Dict[str, Any]] = {
         'output_type': TaskOutputType.STRUCTURED,
         'max_new_tokens': 512,
         'num_beams': 3
-    }
+    },
+
+    # 视觉原语（Visual Primitive）任务
+    'OD_VP': {
+        'prompt': '<OD>',
+        'category': TaskCategory.OBJECT_DETECTION,
+        'description': '视觉原语目标检测',
+        'has_text_input': False,
+        'output_type': TaskOutputType.STRUCTURED,
+        'max_new_tokens': 512,
+        'num_beams': 3,
+        'is_visual_primitive': True,
+    },
+    'COUNT_VP': {
+        'prompt': '<COUNT>',
+        'category': TaskCategory.OBJECT_DETECTION,
+        'description': '视觉原语计数',
+        'has_text_input': True,
+        'output_type': TaskOutputType.STRUCTURED,
+        'max_new_tokens': 256,
+        'num_beams': 3,
+        'is_visual_primitive': True,
+    },
+    'PHRASE_GROUNDING_VP': {
+        'prompt': '<CAPTION_TO_PHRASE_GROUNDING>',
+        'category': TaskCategory.OBJECT_DETECTION,
+        'description': '视觉原语短语定位',
+        'has_text_input': True,
+        'output_type': TaskOutputType.STRUCTURED,
+        'max_new_tokens': 512,
+        'num_beams': 3,
+        'is_visual_primitive': True,
+    },
 }
 
 def get_tasks_by_category(category: TaskCategory) -> Dict[str, Dict[str, Any]]:

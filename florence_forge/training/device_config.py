@@ -126,65 +126,15 @@ class DeviceConfigurator:
             return None
     
     def _build_fsdp_plugin(self, dist_config):
-        """构建 FSDP 插件
-        
-        Args:
-            dist_config: 分布式训练配置
-        
-        Returns:
-            FSDP 插件实例
-        """
-        try:
-            from accelerate.utils import FullyShardedDataParallelPlugin
-            from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
-            from torch.distributed.fsdp import ShardingStrategy
-            
-            # 映射分片策略
-            sharding_strategy_map = {
-                "full_shard": ShardingStrategy.FULL_SHARD,
-                "shard_grad_op": ShardingStrategy.SHARD_GRAD_OP,
-                "no_shard": ShardingStrategy.NO_SHARD,
-                "hybrid_shard": ShardingStrategy.HYBRID_SHARD,
-            }
-            
-            sharding_strategy = sharding_strategy_map.get(
-                dist_config.fsdp_sharding_strategy,
-                ShardingStrategy.FULL_SHARD
-            )
-            
-            fsdp_plugin = FullyShardedDataParallelPlugin(
-                sharding_strategy=sharding_strategy,
-                cpu_offload=dist_config.fsdp_cpu_offload,
-            )
-            
-            logger.info(f"🚀 FSDP 插件已配置：{dist_config.fsdp_sharding_strategy}")
-            return fsdp_plugin
-        except ImportError as e:
-            logger.error(f"❌ FSDP 不可用（需要 PyTorch 1.11+）：{e}")
-            return None
-    
+        """构建 FSDP 插件"""
+        from .fsdp_plugin import FSDPPlugin
+
+        return FSDPPlugin().build_accelerate_plugin(dist_config)
+
     def _build_deepspeed_plugin(self, dist_config):
-        """构建 DeepSpeed 插件
-        
-        Args:
-            dist_config: 分布式训练配置
-        
-        Returns:
-            DeepSpeed 插件实例
-        """
-        try:
-            from accelerate.utils import DeepSpeedPlugin
-            
-            deepspeed_config = dist_config.deepspeed_config_file
-            if deepspeed_config:
-                logger.info(f"🚀 DeepSpeed 插件已配置：{deepspeed_config}")
-                return DeepSpeedPlugin(
-                    deepspeed_config_file=deepspeed_config,
-                    zero_stage=dist_config.deepspeed_zero_stage
-                )
-            else:
-                logger.warning("⚠️  DeepSpeed 配置文件未指定")
-                return None
-        except ImportError as e:
-            logger.error(f"❌ DeepSpeed 不可用：{e}")
-            return None
+        """构建 DeepSpeed 插件"""
+        from .deepspeed_plugin import DeepSpeedPlugin
+
+        return DeepSpeedPlugin().build_accelerate_plugin(
+            dist_config, training_config=self.config
+        )

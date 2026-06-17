@@ -76,7 +76,6 @@ __all__ = [
     'URL',
     'TrainingConfig',
     'Trainer',
-    'TrainerV2',
     'FlorenceForgeError',
     'ConfigError',
     'DataError',
@@ -102,7 +101,6 @@ __all__ = [
 
 _LAZY_EXPORTS = {
     "Trainer": ("florence_forge.training.trainer", "MultiTaskTrainer"),
-    "TrainerV2": ("florence_forge.training.trainer_refactored", "MultiTaskTrainer"),
     "MultiDatasetManager": ("florence_forge.data.multi_dataset_manager", "MultiDatasetManager"),
     "DatasetInfo": ("florence_forge.data.multi_dataset_manager", "DatasetInfo"),
     "TaskDatasetMapping": ("florence_forge.data.multi_dataset_manager", "TaskDatasetMapping"),

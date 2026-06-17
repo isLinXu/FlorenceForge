@@ -620,7 +620,7 @@ class TestLoadBestModelAtEnd:
     """测试 v2 trainer 的 load_best_model_at_end 行为"""
 
     def _build_trainer(self, training_config, mock_model):
-        from florence_forge.training.trainer_refactored import (
+        from florence_forge.training.trainer import (
             MultiTaskTrainer as TrainerV2,
         )
 

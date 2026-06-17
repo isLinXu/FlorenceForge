@@ -172,6 +172,23 @@ class Florence2Backend(BaseVLMBackend):
         """检查是否支持任务"""
         return task_name in FLORENCE2_TASKS
 
+    def _maybe_add_visual_primitive_tokens(self) -> None:
+        """如果启用了视觉原语，将 VP 特殊 token 添加到 tokenizer 并调整模型嵌入。"""
+        if not getattr(self.config, 'enable_visual_primitives', False):
+            return
+        if self._processor is None or self._model is None:
+            return
+
+        from ..visual_primitives import VISUAL_PRIMITIVE_SPECIAL_TOKENS
+
+        tokenizer = getattr(self._processor, 'tokenizer', None)
+        if tokenizer is None:
+            return
+
+        added = tokenizer.add_tokens(list(VISUAL_PRIMITIVE_SPECIAL_TOKENS), special_tokens=True)
+        if added > 0:
+            self._model.resize_token_embeddings(len(tokenizer))
+
     def _get_extra_model_info(self) -> Dict[str, Any]:
         """添加 Florence-2 特有的模型信息"""
         return {"is_peft_model": self.is_peft_model}

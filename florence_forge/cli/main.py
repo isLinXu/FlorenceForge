@@ -365,6 +365,13 @@ def create_parser() -> argparse.ArgumentParser:
   florence_forge_cli convert xml --xml-dir ./annotations --images-dir ./images --output ./data.jsonl
   florence_forge_cli convert ocr --images-dir ./images --texts-dir ./texts --output ./data.jsonl
   
+  # VP (Visual Primitive) 数据转换
+  florence_forge_cli convert vp-coco --json-file ./annotations.json --images-dir ./images --output ./vp_data.jsonl
+  florence_forge_cli convert vp-yolo --labels-dir ./labels --images-dir ./images --classes-file ./classes.txt --output ./vp_data.jsonl
+  
+  # 结构化VP推理
+  florence_forge_cli infer --model ./models/best.pth --input ./test.jpg --output ./results --structured-vp
+  
   # 推理服务
   florence_forge_cli serve --model ./models/best.pth --port 8000
   florence_forge_cli serve --model ./models/best.pth --host 0.0.0.0 --port 8080 --device cuda
@@ -472,12 +479,6 @@ def create_parser() -> argparse.ArgumentParser:
         '--resume', '-r',
         help='从检查点恢复训练 (检查点目录路径)'
     )
-    train_parser.add_argument(
-        '--trainer-version',
-        choices=['v1', 'v2'],
-        default='v1',
-        help='训练器实现版本：v1 为兼容默认值，v2 为模块化重构版 (默认: v1)'
-    )
     
     # 列出任务命令
     subparsers.add_parser('list-tasks', help='列出所有可用任务')
@@ -559,6 +560,36 @@ def create_parser() -> argparse.ArgumentParser:
         action='store_true',
         help='保存可视化结果到文件（默认只显示）'
     )
+    # Structured VP decoding options
+    infer_parser.add_argument(
+        '--structured-vp',
+        action='store_true',
+        help='启用结构化视觉原语解码（将原生输出转为VP证据链）',
+    )
+    infer_parser.add_argument(
+        '--vp-box-format',
+        default='loc_tokens',
+        choices=['loc_tokens', 'json', 'quad'],
+        help='VP解码输出的bbox格式 (默认: loc_tokens)',
+    )
+    infer_parser.add_argument(
+        '--vp-marker-style',
+        default='special',
+        choices=['special', 'angle_bracket'],
+        help='VP解码标记风格 (默认: special)',
+    )
+    infer_parser.add_argument(
+        '--vp-max-boxes-per-label',
+        type=int,
+        default=None,
+        help='VP解码：每个标签最多保留的框数',
+    )
+    infer_parser.add_argument(
+        '--vp-nms-iou-threshold',
+        type=float,
+        default=None,
+        help='VP解码：NMS IoU阈值（过滤重叠框）',
+    )
     
     # 数据转换命令
     convert_parser = subparsers.add_parser('convert', help='数据格式转换')
@@ -631,7 +662,59 @@ def create_parser() -> argparse.ArgumentParser:
         'OCR_WITH_REGION'],
         help='任务类型'
     )
+
+    # ── VP (Visual Primitive) 数据转换 ──────────────────────────────
+    vp_coco_parser = convert_subparsers.add_parser(
+        'vp-coco', help='COCO标注转视觉原语(VP)格式',
+    )
+    vp_coco_parser.add_argument('--json-file', required=True, help='COCO JSON文件路径')
+    vp_coco_parser.add_argument('--images-dir', required=True, help='图像文件目录')
+    vp_coco_parser.add_argument('--output', '-o', required=True, help='输出文件路径')
+    vp_coco_parser.add_argument(
+        '--vp-task', default='OD_VP',
+        choices=['OD_VP', 'COUNT_VP', 'PHRASE_GROUNDING_VP'],
+        help='VP任务类型 (默认: OD_VP)',
+    )
+    vp_coco_parser.add_argument(
+        '--box-format', default='json',
+        choices=['json', 'quad'],
+        help='VP bbox格式 (默认: json)',
+    )
+    vp_coco_parser.add_argument(
+        '--marker-style', default='special',
+        choices=['special', 'angle_bracket'],
+        help='VP标记风格 (默认: special)',
+    )
+
+    vp_yolo_parser = convert_subparsers.add_parser(
+        'vp-yolo', help='YOLO标注转视觉原语(VP)格式',
+    )
+    vp_yolo_parser.add_argument('--labels-dir', required=True, help='YOLO标签文件目录')
+    vp_yolo_parser.add_argument('--images-dir', required=True, help='图像文件目录')
+    vp_yolo_parser.add_argument('--classes-file', required=True, help='类别文件路径')
+    vp_yolo_parser.add_argument('--output', '-o', required=True, help='输出文件路径')
+    vp_yolo_parser.add_argument(
+        '--vp-task', default='OD_VP',
+        choices=['OD_VP', 'COUNT_VP', 'PHRASE_GROUNDING_VP'],
+        help='VP任务类型 (默认: OD_VP)',
+    )
+    vp_yolo_parser.add_argument(
+        '--box-format', default='json',
+        choices=['json', 'quad'],
+        help='VP bbox格式 (默认: json)',
+    )
+    vp_yolo_parser.add_argument(
+        '--marker-style', default='special',
+        choices=['special', 'angle_bracket'],
+        help='VP标记风格 (默认: special)',
+    )
+    vp_yolo_parser.add_argument('--image-ext', default='.jpg', help='图像文件扩展名')
     
+    # ── VP (Visual Primitive) 数据转换 ──────────────────────────────
+    # 设置 VP 子命令的默认处理函数
+    vp_coco_parser.set_defaults(func=run_data_conversion)
+    vp_yolo_parser.set_defaults(func=run_data_conversion)
+
     # 推理服务器命令
     serve_parser = subparsers.add_parser('serve', help='启动模型推理服务')
     serve_parser.add_argument(
@@ -745,8 +828,6 @@ def main() -> None:
             overrides['device'] = args.device
         if hasattr(args, 'resume') and args.resume:
             overrides['resume'] = args.resume
-        if hasattr(args, 'trainer_version') and args.trainer_version:
-            overrides['trainer_version'] = args.trainer_version
         
         success = run_training_task(
             task=args.task,
