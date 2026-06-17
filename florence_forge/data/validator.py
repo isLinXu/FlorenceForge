@@ -34,6 +34,7 @@ class DataValidator:
         self.validation_results = []
         self.error_count = 0
         self.warning_count = 0
+        self._detected_schema: str = ""
 
     def validate_dataset(self, data_path: Union[str, Path]) -> Dict[str, Any]:
         """验证数据集
@@ -189,47 +190,106 @@ class DataValidator:
         return summary
 
     def _validate_sample_fields(self, sample: Dict[str, Any], index: int) -> bool:
-        """验证样本字段"""
-        required_fields = ["image", "conversations"]
+        """验证样本字段，支持 training schema (prefix/suffix) 和 conversations schema"""
+        # 检测 schema 类型
+        has_training_fields = "prefix" in sample or "suffix" in sample
+        has_conversations = "conversations" in sample
 
-        # 检查必需字段
-        for field in required_fields:
-            if field not in sample:
-                self._add_error(f"样本{index}: 缺少必需字段 '{field}'")
+        # 如果已明确指定 training schema，强制使用 training 验证
+        if self._detected_schema == "training" or has_training_fields:
+            if not self._detected_schema:
+                self._detected_schema = "training"
+            # Training schema: image + prefix + suffix
+            if "image" not in sample:
+                self._add_error(f"样本{index}: 缺少必需字段 'image'")
+                return False
+            if "prefix" not in sample:
+                self._add_error(f"样本{index}: 缺少必需字段 'prefix'")
+                return False
+            if not sample.get("prefix", "").strip():
+                self._add_error(f"样本{index}: prefix 字段不能为空")
+                return False
+            if "suffix" not in sample:
+                self._add_error(f"样本{index}: 缺少必需字段 'suffix'")
+                return False
+            if not sample.get("suffix", "").strip():
+                self._add_warning(f"样本{index}: suffix 字段为空")
+            return True
+
+        elif has_conversations or self._detected_schema == "conversations":
+            # Conversations schema
+            if not self._detected_schema:
+                self._detected_schema = "conversation"
+            required_fields = ["image", "conversations"]
+
+            # 检查必需字段
+            for field in required_fields:
+                if field not in sample:
+                    self._add_error(f"样本{index}: 缺少必需字段 '{field}'")
+                    return False
+
+            # 验证conversations格式
+            conversations = sample.get("conversations", [])
+            if not isinstance(conversations, list) or len(conversations) == 0:
+                self._add_error(f"样本{index}: conversations字段必须是非空列表")
                 return False
 
-        # 验证conversations格式
-        conversations = sample.get("conversations", [])
-        if not isinstance(conversations, list) or len(conversations) == 0:
-            self._add_error(f"样本{index}: conversations字段必须是非空列表")
+            # 验证对话格式
+            for j, conv in enumerate(conversations):
+                if not isinstance(conv, dict):
+                    self._add_error(f"样本{index}: conversations[{j}]必须是字典")
+                    return False
+
+                if "from" not in conv or "value" not in conv:
+                    self._add_error(
+                        f"样本{index}: conversations[{j}]缺少'from'或'value'字段"
+                    )
+                    return False
+
+                if conv["from"] not in ["human", "gpt"]:
+                    self._add_warning(
+                        f"样本{index}: conversations[{j}]['from']值异常: {conv['from']}"
+                    )
+
+            return True
+        else:
+            # 未知 schema
+            self._add_error(f"样本{index}: 缺少必需字段 'conversations'")
             return False
-
-        # 验证对话格式
-        for j, conv in enumerate(conversations):
-            if not isinstance(conv, dict):
-                self._add_error(f"样本{index}: conversations[{j}]必须是字典")
-                return False
-
-            if "from" not in conv or "value" not in conv:
-                self._add_error(
-                    f"样本{index}: conversations[{j}]缺少'from'或'value'字段"
-                )
-                return False
-
-            if conv["from"] not in ["human", "gpt"]:
-                self._add_warning(
-                    f"样本{index}: conversations[{j}]['from']值异常: {conv['from']}"
-                )
-
-        return True
 
     def _validate_task_specific_content(
         self, sample: Dict[str, Any], index: int
     ) -> None:
         """验证任务特定内容"""
         task_type = sample.get("task_type", "")
-        conversations = sample.get("conversations", [])
 
+        # Training schema: 检查 prefix/suffix 内容
+        if "prefix" in sample or "suffix" in sample:
+            prefix = sample.get("prefix", "")
+            suffix = sample.get("suffix", "")
+            if task_type and prefix:
+                # 验证任务前缀是否匹配
+                from ..core.tasks import FLORENCE2_TASKS
+                task_config = FLORENCE2_TASKS.get(task_type, {})
+                expected_prompt = task_config.get("prompt", "")
+                if expected_prompt and expected_prompt not in prefix:
+                    self._add_warning(
+                        f"样本{index}: 任务类型 '{task_type}' 的前缀不包含预期提示 '{expected_prompt}'"
+                    )
+
+            # 检查 suffix 中的坐标是否超出范围
+            import re
+            loc_pattern = re.compile(r"<loc_(\d+)>")
+            for match in loc_pattern.finditer(suffix):
+                coord_value = int(match.group(1))
+                if coord_value > 1000:
+                    self._add_warning(
+                        f"样本{index}: 检测坐标超出范围 <loc_{coord_value}>，有效范围 0-1000"
+                    )
+            return
+
+        # Conversations schema
+        conversations = sample.get("conversations", [])
         if not conversations:
             return
 
@@ -310,19 +370,24 @@ class DataValidator:
         is_valid = self.error_count == 0 and (
             not self.strict_mode or self.warning_count == 0
         )
-        return {
+        result = {
             "is_valid": is_valid,
             "error_count": self.error_count,
             "warning_count": self.warning_count,
             "validation_results": self.validation_results,
             "status": "passed" if is_valid else "failed",
         }
+        if self._detected_schema:
+            result["effective_schema"] = self._detected_schema
+            result["detected_schema"] = self._detected_schema
+        return result
 
     def reset(self) -> None:
         """重置验证状态"""
         self.validation_results = []
         self.error_count = 0
         self.warning_count = 0
+        self._detected_schema = ""
 
     @staticmethod
     def validate_florence2_jsonl(
@@ -416,16 +481,19 @@ class DataValidator:
 
 
 def validate_data_format(
-    data_path: Union[str, Path], strict_mode: bool = False
+    data_path: Union[str, Path], strict_mode: bool = False, schema: str = None
 ) -> Dict[str, Any]:
     """验证数据格式的便捷函数
 
     Args:
         data_path: 数据路径
         strict_mode: 是否启用严格模式
+        schema: 可选，指定数据 schema（"training" 或 "conversations"）
 
     Returns:
         验证结果
     """
     validator = DataValidator(strict_mode=strict_mode)
+    if schema:
+        validator._detected_schema = schema
     return validator.validate_dataset(data_path)
