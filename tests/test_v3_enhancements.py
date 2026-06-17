@@ -24,23 +24,14 @@ import torch.nn as nn
 # ---------------------------------------------------------------------------
 
 
-class TestV2DefaultExport:
-    """验证 __init__.py 默认导出指向 v2"""
+class TestDefaultTrainerExport:
+    """验证默认导出指向 trainer.MultiTaskTrainer"""
 
-    def test_default_import_is_v2(self):
+    def test_default_import_is_canonical_trainer(self):
         from florence_forge.training import MultiTaskTrainer
-        from florence_forge.training.trainer_refactored import (
-            MultiTaskTrainer as V2Trainer,
-        )
-        assert MultiTaskTrainer is V2Trainer
+        from florence_forge.training.trainer import MultiTaskTrainer as TrainerCls
 
-    def test_training_init_exports_v2_trainer(self):
-        from florence_forge.training import MultiTaskTrainer as InitTrainer
-        from florence_forge.training.trainer_refactored import (
-            MultiTaskTrainer as V2Trainer,
-        )
-        # training.__init__ exports v2 MultiTaskTrainer
-        assert InitTrainer is V2Trainer
+        assert MultiTaskTrainer is TrainerCls
 
 
 # ---------------------------------------------------------------------------
@@ -463,8 +454,8 @@ class TestDeviceConfiguratorCPUTips:
 class TestRegression:
     """回归测试：确保现有测试仍然通过"""
 
-    def test_trainer_refactored_import(self):
-        from florence_forge.training.trainer_refactored import MultiTaskTrainer
+    def test_trainer_import(self):
+        from florence_forge.training.trainer import MultiTaskTrainer
         assert MultiTaskTrainer is not None
 
     def test_training_loop_import(self):
