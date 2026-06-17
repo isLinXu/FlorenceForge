@@ -41,6 +41,8 @@ TASK_CONFIG_MAPPING: Dict[str, str] = {
     'referring_expression_segmentation': 'configs/examples/referring_expression_segmentation_training.yaml',
     'multitask': 'configs/examples/multitask_training.yaml',
     'multi': 'configs/examples/multitask_training.yaml',
+    'visual_primitive': 'configs/examples/visual_primitive_training.yaml',
+    'vp': 'configs/examples/visual_primitive_training.yaml',
 }
 
 # 任务描述（用于 list-tasks 展示）
@@ -61,6 +63,7 @@ TASK_DESCRIPTIONS: Dict[str, str] = {
     'region_to_segmentation': '区域到分割任务 (REGION_TO_SEGMENTATION)',
     'referring_expression_segmentation': '参考表达式分割任务 (REFERRING_EXPRESSION_SEGMENTATION)',
     'multitask': '多任务混合训练 (CAPTION + OD + OCR + SEGMENTATION)',
+    'visual_primitive': '视觉原语训练 (OD_VP + COUNT_VP + PHRASE_GROUNDING_VP)',
 }
 
 

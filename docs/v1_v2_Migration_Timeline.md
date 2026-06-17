@@ -10,7 +10,7 @@
 | 维度 | v1 (`trainer.py`) | v2 (`trainer_refactored.py` + `training_loop.py` + `checkpoint_manager.py` + `device_config.py`) |
 | --- | --- | --- |
 | 形态 | 单文件 god class（~1369 行） | 组合式模块化（职责分层） |
-| 默认导出 | `MultiTaskTrainer` 指向 v1 | 需显式 `from florence_forge.training.trainer_refactored import MultiTaskTrainer` |
+| 默认导出 | `MultiTaskTrainer` 指向 **v2**（v1.2.0） | `MultiTaskTrainerV1` 指向 v1 |
 | 测试 | `tests/test_trainer.py` | `tests/test_training_integration.py` |
 | CheckpointManager | `checkpoint.py`（函数式工具集） | `checkpoint_manager.py`（OO 生命周期版） |
 
@@ -23,8 +23,8 @@
 | `max_steps` 硬上限 | ✅ | ✅（2026-06-01 补齐） | v2 `TrainingLoop._max_steps_reached` + 内/外层循环终止 |
 | `load_best_model_at_end` | ✅ | ✅（2026-06-01 补齐） | v2 `_maybe_restore_best_model` 收尾前恢复最佳权重 |
 | 梯度验证 / 内存监控 | ✅ | ✅ | v2 在 `train_epoch` 中按间隔触发 |
-| 激活值重计算多档策略 | ✅ | ⚠️ 部分 | v2 `GradientCheckpointOptimizer` 提供 full/selective 自动选择，尚未覆盖 v1 的全部档位 |
-| 双 `CheckpointManager` 合并 | — | ⏳ 待办 | 见下方里程碑 |
+| 激活值重计算多档策略 | ✅ | ✅ | v2 `ActivationRecomputePolicy`（off/low/medium/high）与 v1 策略映射 |
+| 双 `CheckpointManager` 合并 | — | ✅（v1.2.0） | v2 `CheckpointManager` 为默认导出；`checkpoint.py` 保留 `LegacyCheckpointManager` shim |
 
 > 结论：v2 的核心训练能力已基本达到与 v1 对齐；剩余差距集中在**激活值重计算高级档位**与**双 CheckpointManager 合并**。
 
@@ -36,25 +36,32 @@
 - 在 v1 `trainer.py` 顶部与 `MultiTaskTrainer.__init__` 中加入**非强制** `DeprecationWarning`（可通过环境变量关闭），引导新代码迁移到 v2。
 - 文档与示例统一推荐 v2 入口。
 
-### v1.2.0 —「默认切换」
+### v1.2.0 —「默认切换」（**已完成**，2026-06-17）
 - 顶层默认导出 `florence_forge.training.MultiTaskTrainer` 切换为 v2。
-- 合并双 `CheckpointManager`：保留 `checkpoint_manager.py` 的 OO 生命周期版为唯一实现，
-  将 `checkpoint.py` 中仍被外部脚本依赖的 `save_model_only / load_model_only / create_checkpoint_manager`
-  改为对前者的薄封装（thin shim），保持向后兼容。
-- 补充真实多 GPU CUDA 集成测试覆盖 v2 的 FSDP/DeepSpeed 路径（对应增量报告 P1）。
+- 新增 `MultiTaskTrainerV1` / `LegacyCheckpointManager` 别名保留 v1 兼容。
+- CLI `--trainer-version` 默认改为 v2。
+- `checkpoint.py` 类重命名为 `LegacyCheckpointManager`（`CheckpointManager` 为模块内别名）。
+- 补充 v2 模块单元测试（`tests/test_v2_training_modules.py`）。
+- ⏳ 真实多 GPU CUDA 集成测试仍待 CUDA 环境补齐。
 
-### v2.0.0 —「移除 v1」
-- 删除 `trainer.py`（v1）及 `checkpoint.py` 中已被 shim 取代的实现。
-- 文档归档 v1 资料，移除并存说明。
+# v2.0.0 —「移除 v1」（**已完成**，2026-06-17）
+- 删除 v1 `trainer.py`（god class）与 `trainer_io.py`。
+- 模块化训练栈合并为唯一 `trainer.py`。
+- 删除 `checkpoint.py`；`save_model_only` / `load_model_only` 迁入 `checkpoint_manager.py`。
+- CLI 移除 `--trainer-version`；v1 请求显式报错。
+- `MultiDatasetTrainer` 迁移至新训练栈基类。
 
 ## 迁移指引（面向使用者）
 
 ```python
-# 旧（v1，默认导出）
+# 默认（v2，推荐）
 from florence_forge.training import MultiTaskTrainer
 
-# 新（v2，推荐）
-from florence_forge.training.trainer_refactored import MultiTaskTrainer
+# 遗留 v1（已弃用）
+from florence_forge.training import MultiTaskTrainerV1
+
+# 显式 v2 别名
+from florence_forge.training import MultiTaskTrainerV2
 from florence_forge.training.training_loop import TrainingLoop
 from florence_forge.training.checkpoint_manager import CheckpointManager
 ```

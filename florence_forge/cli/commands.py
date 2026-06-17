@@ -29,18 +29,42 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _select_trainer_class(version: str):
-    """Select the training stack requested by CLI or programmatic callers."""
-    normalized = (version or "v1").strip().lower()
-    if normalized in {"v1", "legacy"}:
-        from florence_forge.training.trainer import MultiTaskTrainer
+def _select_trainer_class(version: str | None = None):
+    """Return the canonical training stack (v1 removed in v2.0.0)."""
+    if version and version.strip().lower() in {"v1", "legacy"}:
+        raise ValueError(
+            "v1 训练栈已在 v2.0.0 移除；请使用默认 v2 MultiTaskTrainer"
+        )
+    from florence_forge.training.trainer import MultiTaskTrainer
 
-        return MultiTaskTrainer
-    if normalized in {"v2", "refactored", "modular"}:
-        from florence_forge.training.trainer_refactored import MultiTaskTrainer
+    return MultiTaskTrainer
 
-        return MultiTaskTrainer
-    raise ValueError(f"不支持的训练器版本: {version}")
+
+def _apply_structured_vp_decode(result, args) -> dict:
+    """Apply structured VP decoding to an inference result if --structured-vp is enabled."""
+    if not getattr(args, 'structured_vp', False):
+        return {"result": result}
+
+    from florence_forge.evaluation.structured_vp_decoder import StructuredVisualPrimitiveDecoder
+
+    decoder = StructuredVisualPrimitiveDecoder(
+        box_format=getattr(args, 'vp_box_format', 'loc_tokens'),
+        marker_style=getattr(args, 'vp_marker_style', 'special'),
+        max_boxes_per_label=getattr(args, 'vp_max_boxes_per_label', None),
+        nms_iou_threshold=getattr(args, 'vp_nms_iou_threshold', None),
+    )
+
+    # Result may be a string (raw model output) or dict/list
+    text = result if isinstance(result, str) else str(result)
+    decoded = decoder.decode(text)
+
+    return {
+        "raw_result": result,
+        "vp_text": decoded.vp_text,
+        "vp_labels": decoded.labels,
+        "vp_boxes": decoded.boxes,
+        "vp_counts": decoded.counts,
+    }
 
 
 def run_inference_task(args) -> bool:
@@ -121,13 +145,14 @@ def run_inference_task(args) -> bool:
                     save_path=str(save_path) if save_path else None
                 )
 
+                # Apply structured VP decoding if requested
+                output_data = {"image_path": str(input_path)}
+                output_data.update(_apply_structured_vp_decode(result, args))
+
                 # 保存结果
                 result_file = output_dir / f"{input_path.stem}_result.json"
                 with open(result_file, 'w', encoding='utf-8') as f:
-                    json.dump({
-                        "image_path": str(input_path),
-                        "result": str(result) if not isinstance(result, (dict, list)) else result
-                    }, f, indent=2, ensure_ascii=False)
+                    json.dump(output_data, f, indent=2, ensure_ascii=False, default=str)
 
                 results.append({
                     "image_path": str(input_path),
@@ -182,13 +207,14 @@ def run_inference_task(args) -> bool:
                         save_path=str(save_path) if save_path else None
                     )
 
+                    # Apply structured VP decoding if requested
+                    output_data = {"image_path": str(image_path)}
+                    output_data.update(_apply_structured_vp_decode(result, args))
+
                     # 保存结果
                     result_file = output_dir / f"{image_path.stem}_result.json"
                     with open(result_file, 'w', encoding='utf-8') as f:
-                        json.dump({
-                            "image_path": str(image_path),
-                            "result": str(result) if not isinstance(result, (dict, list)) else result
-                        }, f, indent=2, ensure_ascii=False)
+                        json.dump(output_data, f, indent=2, ensure_ascii=False, default=str)
 
                     results.append({
                         "image_path": str(image_path),
@@ -487,6 +513,34 @@ def run_data_conversion(args) -> bool:
                 task_type=args.task_type
             )
 
+        elif args.convert_type in ('vp-coco', 'vp-yolo'):
+            from florence_forge.data.vp_converter import VisualPrimitiveConverter
+
+            vp_task = getattr(args, 'vp_task', 'OD_VP')
+            box_fmt = getattr(args, 'box_format', 'json')
+            marker = getattr(args, 'marker_style', 'special')
+
+            if args.convert_type == 'vp-coco':
+                VisualPrimitiveConverter.coco_to_vp_od(
+                    coco_json_path=args.json_file,
+                    output_path=args.output,
+                    image_dir=args.images_dir,
+                    task_type=vp_task,
+                    box_format=box_fmt,
+                    marker_style=marker,
+                )
+            else:  # vp-yolo
+                VisualPrimitiveConverter.yolo_to_vp_od(
+                    labels_dir=args.labels_dir,
+                    output_path=args.output,
+                    image_dir=args.images_dir,
+                    classes_file=args.classes_file,
+                    task_type=vp_task,
+                    box_format=box_fmt,
+                    marker_style=marker,
+                    image_ext=getattr(args, 'image_ext', '.jpg'),
+                )
+
         else:
             logger.error(f"❌ 不支持的转换类型: {args.convert_type}")
             return False
@@ -528,8 +582,7 @@ def run_training_task(
     try:
         from florence_forge.core.model import Florence2MultiTaskModel
         from florence_forge.training.config import load_config_from_file
-        trainer_version = overrides.pop("trainer_version", "v1")
-        MultiTaskTrainer = _select_trainer_class(trainer_version)
+        MultiTaskTrainer = _select_trainer_class(overrides.pop("trainer_version", None))
 
         # 确定配置文件路径
         if config:
@@ -589,7 +642,7 @@ def run_training_task(
         logger.info("🚀 开始训练任务")
         logger.info(f"   任务类型: {task or 'custom'}")
         logger.info(f"   配置文件: {actual_config_path}")
-        logger.info(f"   训练器版本: {trainer_version}")
+        logger.info(f"   训练器: MultiTaskTrainer (模块化训练栈)")
 
         if overrides:
             logger.info(f"   参数覆盖: {overrides}")

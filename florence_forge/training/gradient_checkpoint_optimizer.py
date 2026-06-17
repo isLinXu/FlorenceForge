@@ -1,9 +1,10 @@
 """梯度检查点优化器
 
-提供智能梯度检查点策略选择和应用
+提供智能梯度检查点策略选择和应用，支持 4 档激活重计算策略
 """
 import logging
 from typing import Optional, List
+from enum import Enum, auto
 import re
 
 import torch.nn as nn
@@ -11,41 +12,86 @@ import torch.nn as nn
 logger = logging.getLogger(__name__)
 
 
+class ActivationRecomputePolicy(Enum):
+    """激活值重计算策略
+
+    off: 不重计算，直接前向传播（默认）
+    low: 少量重计算（选择性激活）
+    medium: 中等重计算
+    high: 全量重计算
+    """
+    off = auto()
+    low = auto()
+    medium = auto()
+    high = auto()
+
+
 class GradientCheckpointOptimizer:
     """梯度检查点优化器
     
-    自动选择和应用最优的梯度检查点策略
+    自动选择和应用最优的梯度检查点策略，支持 4 档激活重计算：
+    - off: 不重计算（默认）
+    - low: 选择性重计算
+    - medium: 中等重计算
+    - high: 全量重计算
     """
     
-    def __init__(self, model: nn.Module, config):
+    def __init__(self, model: nn.Module, config, policy: Optional[ActivationRecomputePolicy] = None):
         """初始化优化器
         
         Args:
             model: 训练模型
             config: 训练配置
+            policy: 激活重计算策略（默认 None，从 config 读取）
         """
         self.model = model
         self.config = config
+        self.policy = policy or ActivationRecomputePolicy.off
     
     def enable_gradient_checkpointing(self) -> None:
         """启用梯度检查点
-        
-        自动选择策略：full（全量） 或 selective（选择性）
+
+        策略由 ``ActivationRecomputePolicy``（4 档）或
+        ``model_settings.activation_checkpointing_strategy`` 决定。
         """
-        if not self.config.gradient_checkpointing:
+        strategy = self._resolve_strategy()
+        if strategy in (None, "none"):
+            logger.info("激活值重计算已禁用")
             return
-        
-        # 自动选择策略
-        strategy = self._auto_select_strategy()
-        
-        logger.info(f"🔄 启用梯度检查点：策略={strategy}")
-        
+
+        logger.info("启用梯度检查点：策略=%s（policy=%s）", strategy, self.policy.name)
+
         if strategy == "full":
             self._apply_full_checkpointing()
         elif strategy == "selective":
             self._apply_selective_checkpointing()
         else:
-            logger.warning(f"未知的梯度检查点策略：{strategy}")
+            logger.warning("未知的梯度检查点策略：%s", strategy)
+
+    def _resolve_strategy(self) -> Optional[str]:
+        """将 4 档 policy 映射为 full / selective / none。"""
+        policy_map = {
+            ActivationRecomputePolicy.off: "none",
+            ActivationRecomputePolicy.low: "selective",
+            ActivationRecomputePolicy.medium: "selective",
+            ActivationRecomputePolicy.high: "full",
+        }
+        if self.policy != ActivationRecomputePolicy.off:
+            return policy_map[self.policy]
+
+        model_settings = getattr(self.config, "model_settings", None)
+        if model_settings is not None:
+            strategy = getattr(model_settings, "activation_checkpointing_strategy", "none")
+            if strategy == "none" and getattr(model_settings, "gradient_checkpointing", False):
+                return "full"
+            if strategy != "none":
+                if strategy == "auto":
+                    return self._auto_select_strategy()
+                return strategy
+
+        if getattr(self.config, "gradient_checkpointing", False):
+            return self._auto_select_strategy()
+        return "none"
     
     def _auto_select_strategy(self) -> str:
         """自动选择梯度检查点策略
@@ -80,11 +126,24 @@ class GradientCheckpointOptimizer:
     
     def _apply_selective_checkpointing(self) -> None:
         """应用选择性梯度检查点
-        
-        根据配置的层名模式或间隔选择部分层启用检查点
+
+        根据配置的层名模式或间隔选择部分层启用检查点。
+        low 策略使用更大间隔以节省计算。
         """
-        checkpoint_layers = getattr(self.config, 'checkpoint_layers', None)
-        checkpoint_interval = getattr(self.config, 'checkpoint_interval', 1)
+        model_settings = getattr(self.config, "model_settings", None)
+        checkpoint_layers = getattr(self.config, "checkpoint_layers", None)
+        checkpoint_interval = getattr(self.config, "checkpoint_interval", None)
+
+        if model_settings is not None:
+            checkpoint_layers = checkpoint_layers or getattr(
+                model_settings, "checkpoint_target_layers", None
+            )
+            checkpoint_interval = checkpoint_interval or getattr(
+                model_settings, "checkpoint_every_n_layers", None
+            )
+
+        if checkpoint_interval is None:
+            checkpoint_interval = 3 if self.policy == ActivationRecomputePolicy.low else 1
         
         if checkpoint_layers:
             # 按层名模式选择

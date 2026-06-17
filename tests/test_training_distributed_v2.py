@@ -58,7 +58,7 @@ class TestDeviceConfiguratorDistributed:
         )
         assert plugin is not None
 
-    def test_build_deepspeed_plugin_requires_config_file(self):
+    def test_build_deepspeed_plugin_without_config_file(self):
         if not _has_accelerate():
             pytest.skip("accelerate 未安装")
 
@@ -67,11 +67,16 @@ class TestDeviceConfiguratorDistributed:
             enabled=True,
             strategy="deepspeed",
             deepspeed_config_file=None,
+            deepspeed_stage=2,
         )
-        plugin = DeviceConfigurator(config).build_distributed_plugin(
-            config.distributed_settings
-        )
-        assert plugin is None
+        with patch(
+            "florence_forge.training.deepspeed_plugin.DeepSpeedPlugin"
+        ) as mock_ds:
+            mock_ds.return_value.build_accelerate_plugin.return_value = object()
+            plugin = DeviceConfigurator(config).build_distributed_plugin(
+                config.distributed_settings
+            )
+        assert plugin is not None
 
     def test_disabled_strategy_returns_none(self):
         config = TrainingConfig()
@@ -89,7 +94,7 @@ class TestTrainerV2AcceleratorWiring:
         if not _has_accelerate():
             pytest.skip("accelerate 未安装")
 
-        from florence_forge.training.trainer_refactored import MultiTaskTrainer
+        from florence_forge.training.trainer import MultiTaskTrainer
 
         config = TrainingConfig(device="cpu", num_epochs=1)
         config.distributed_settings = DistributedConfig(
@@ -108,7 +113,7 @@ class TestTrainerV2AcceleratorWiring:
             return_value=fake_plugin,
         ):
             with patch(
-                "florence_forge.training.trainer_refactored.Accelerator"
+                "florence_forge.training.trainer.Accelerator"
             ) as accelerator_cls:
                 trainer = MultiTaskTrainer(
                     model=model,
@@ -123,7 +128,7 @@ class TestTrainerV2AcceleratorWiring:
 
 
 def test_plot_backend_defaults_to_no_show(monkeypatch):
-    from florence_forge.evaluation.plot_backend import should_show_plots
+    from florence_forge.utils.plot_backend import should_show_plots
 
     monkeypatch.delenv("FLORENCE_FORGE_SHOW_PLOTS", raising=False)
     assert should_show_plots() is False
@@ -204,7 +209,7 @@ def test_accelerate_cuda_training_step_smoke():
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA 不可用")
 def test_multitask_trainer_v2_setup_and_one_training_step_cuda():
     """v2 MultiTaskTrainer：setup_training + TrainingLoop 单步（CUDA）。"""
-    from florence_forge.training.trainer_refactored import MultiTaskTrainer
+    from florence_forge.training.trainer import MultiTaskTrainer
 
     class TinyModel(nn.Module):
         def forward(self, input_ids=None, labels=None, **kwargs):

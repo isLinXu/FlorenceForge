@@ -64,7 +64,7 @@ def test_coco_to_vp_counting_outputs_one_sample_per_label(tmp_path):
 
     rows = [json.loads(line) for line in output_path.read_text(encoding="utf-8").splitlines()]
     assert len(rows) == 1
-    assert rows[0]["prefix"] == "<OD>"
+    assert rows[0]["prefix"] == "<COUNT>"
     assert rows[0]["count_label"] == "cat"
     assert rows[0]["count"] == 2
     assert "There are 2 cat in this image." in rows[0]["suffix"]
@@ -208,7 +208,7 @@ def test_yolo_to_vp_counting_outputs_one_sample_per_label(tmp_path):
 
     rows = [json.loads(line) for line in output_path.read_text(encoding="utf-8").splitlines()]
     assert len(rows) == 1
-    assert rows[0]["prefix"] == "<OD>"
+    assert rows[0]["prefix"] == "<COUNT>"
     assert rows[0]["source_format"] == "yolo"
     assert rows[0]["count_label"] == "cat"
     assert rows[0]["count"] == 2

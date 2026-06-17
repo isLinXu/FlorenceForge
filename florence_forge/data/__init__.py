@@ -14,6 +14,7 @@ from .converter import DataFormatConverter
 from .dataset import MultiTaskDataset, TaskSample
 from .validator import DataValidator, validate_data_format
 from .utils import generate_mask_from_polygon
+from .vp_converter import VisualPrimitiveConverter
 
 __all__ = [
     "MultiTaskDataset",
@@ -27,4 +28,5 @@ __all__ = [
     "DataValidator",
     "validate_data_format",
     "generate_mask_from_polygon",
+    "VisualPrimitiveConverter",
 ]
