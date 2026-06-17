@@ -45,7 +45,7 @@ class _DummyModel(nn.Module):
 
 def _make_trainer(config=None, with_val=True):
     """Build a v2 MultiTaskTrainer with mocked internals (avoids real Accelerator)."""
-    from florence_forge.training.trainer_refactored import MultiTaskTrainer
+    from florence_forge.training.trainer import MultiTaskTrainer
     from florence_forge.data.dataset import MultiTaskDataset
 
     cfg = config or TrainingConfig(num_epochs=1, output_dir="/tmp/test_output")
@@ -222,6 +222,9 @@ class TestConfigPersistence:
     def test_save_config_creates_json(self, tmp_path):
         cfg = TrainingConfig(num_epochs=5, output_dir=str(tmp_path / "out"))
         trainer = _make_trainer(cfg)
+        # Mock get_task_statistics to return JSON-serializable dicts
+        trainer.train_dataset.get_task_statistics.return_value = {"task_a": 10}
+        trainer.val_dataset.get_task_statistics.return_value = {"task_a": 2}
         trainer._save_config()
 
         config_path = tmp_path / "out" / "training_config.json"
