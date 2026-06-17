@@ -1,9 +1,6 @@
-"""训练循环核心逻辑（v2）
+"""训练循环核心逻辑
 
-⚠️ 这是 v2 训练栈的组件，由 `trainer_refactored.MultiTaskTrainer` 使用。
-v1（`trainer.py`）有自己的内联循环，不依赖本文件。
-
-提供训练和验证的核心循环逻辑
+由 ``trainer.MultiTaskTrainer`` 组合使用。
 """
 import logging
 import time

@@ -65,7 +65,7 @@ class ModelMerger:
     
     def merge_and_unload(
         self,
-        peft_model: PeftModel,
+        model: PeftModel,
         output_dir: Optional[Union[str, Path]] = None,
         save_tokenizer: bool = True,
         save_processor: bool = True
@@ -73,7 +73,7 @@ class ModelMerger:
         """合并LoRA权重并卸载PEFT包装器
         
         Args:
-            peft_model: PEFT模型
+            model: PEFT模型或Florence2MultiTaskModel包装器
             output_dir: 输出目录（可选）
             save_tokenizer: 是否保存tokenizer
             save_processor: 是否保存processor
@@ -82,6 +82,13 @@ class ModelMerger:
             合并后的Florence2MultiTaskModel
         """
         logger.info("开始合并LoRA权重并卸载PEFT包装器...")
+        
+        # 兼容：如果传入的是 Florence2MultiTaskModel，提取其内部 PEFT 模型
+        from ..core.model import Florence2MultiTaskModel as _Wrapper
+        if isinstance(model, _Wrapper):
+            peft_model = model.model
+        else:
+            peft_model = model
         
         try:
             # 合并并卸载PEFT模型
@@ -94,10 +101,10 @@ class ModelMerger:
                 trust_remote_code=True
             )
             
-            # 创建Florence2MultiTaskModel实例
-            florence_model = Florence2MultiTaskModel.__new__(Florence2MultiTaskModel)
-            florence_model.config = merged_config
-            florence_model.model = merged_hf_model
+            # 创建Florence2MultiTaskModel实例（使用正常构造函数）
+            florence_model = Florence2MultiTaskModel(merged_config)
+            # 将合并后的 HF 模型注入后端
+            florence_model._backend._model = merged_hf_model
             florence_model.is_peft_model = False
             
             # 尝试加载processor
