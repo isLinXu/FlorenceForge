@@ -31,4 +31,21 @@ warnings.warn(
 # 不在此处主动 re-export 子模块，避免误用。
 # 如确需使用：from florence_forge.experimental.moe.moe_layer import MoELayer
 
-__all__: list[str] = []
+__all__ = ["MoETrainingAdapter", "MoEConfig", "ExperimentalMoEWarning"]
+
+# 懒加载 re-export，避免包级导入时触发重依赖拉起
+_LAZY_EXPORTS = {
+    "MoETrainingAdapter": ("florence_forge.experimental.moe.moe_adapter", "MoETrainingAdapter"),
+    "MoEConfig": ("florence_forge.experimental.moe.moe_config", "MoEConfig"),
+}
+
+
+def __getattr__(name):
+    if name in _LAZY_EXPORTS:
+        import importlib
+        module_name, attr_name = _LAZY_EXPORTS[name]
+        module = importlib.import_module(module_name)
+        value = getattr(module, attr_name)
+        globals()[name] = value
+        return value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
