@@ -5,6 +5,14 @@
 
 model_name_or_path: "microsoft/Florence-2-base"
 torch_dtype: "bfloat16"
+output_dir: "outputs/tvp/sft"
+use_lora: true
+enable_visual_primitives: true
+experiment_name: "florenceforge_tvp_sft"
+
+mixed_training:
+  enabled: true
+  tvp_ratio: 0.3
 
 freeze_vision_tower: true
 freeze_llm: false

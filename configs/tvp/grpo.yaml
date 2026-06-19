@@ -4,7 +4,9 @@
 # GRPO loads both policy and ref_model — doubles VRAM requirement.
 # Keep batch_size small, use gradient accumulation.
 
+output_dir: "outputs/tvp/grpo"
 model_name_or_path: "outputs/tvp/opd/final"
+ref_model: "outputs/tvp/sft/final"
 torch_dtype: "bfloat16"
 
 load_in_4bit: false

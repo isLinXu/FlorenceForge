@@ -16,6 +16,8 @@ from ..core.visual_primitives import (
     format_ref_box,
     format_ref_box_loc_tokens,
     normalize_bbox,
+    resolve_marker_style,
+    sort_boxes_left_to_right,
 )
 from ..evaluation.visual_primitive_parser import VisualPrimitiveParser
 
@@ -479,7 +481,10 @@ class VisualPrimitiveConverter:
                 logger.warning("Skipping invalid COCO annotation %s: %s", ann, exc)
                 continue
             grouped[str(label).strip()].append(bbox)
-        return dict(grouped)
+        return {
+            label: sort_boxes_left_to_right(boxes)
+            for label, boxes in grouped.items()
+        }
 
     @staticmethod
     def _read_yolo_grouped_boxes(
@@ -516,7 +521,10 @@ class VisualPrimitiveConverter:
                     normalize_bbox([x1, y1, x2, y2], image_size, input_format="xyxy")
                 )
 
-        return dict(grouped)
+        return {
+            label: sort_boxes_left_to_right(boxes)
+            for label, boxes in grouped.items()
+        }
 
     @staticmethod
     def _format_grouped_ref_boxes(
@@ -524,8 +532,13 @@ class VisualPrimitiveConverter:
         box_format: str = "json",
         marker_style: str = "special",
     ) -> str:
+        marker_style = resolve_marker_style(marker_style)
         formatter = VisualPrimitiveConverter._get_ref_box_formatter(box_format, marker_style=marker_style)
-        return "\n".join(formatter(label, boxes) for label, boxes in grouped.items())
+        lines = []
+        for label, boxes in grouped.items():
+            sorted_boxes = sort_boxes_left_to_right(boxes)
+            lines.append(formatter(label, sorted_boxes))
+        return "\n".join(lines)
 
     @staticmethod
     def _format_counting_suffix(
@@ -533,14 +546,30 @@ class VisualPrimitiveConverter:
         boxes: List[List[int]],
         box_format: str = "json",
         marker_style: str = "special",
+        counting_mode: str = "coarse",
+        query_hint: str = "",
     ) -> str:
-        count = len(boxes)
-        formatter = VisualPrimitiveConverter._get_ref_box_formatter(box_format, marker_style=marker_style)
+        sorted_boxes = sort_boxes_left_to_right(boxes)
+        count = len(sorted_boxes)
+        if counting_mode == "fine":
+            from .tvp_converter import TVPChainBuilder
+            return TVPChainBuilder.build_fine_grained_counting_chain(
+                label=label,
+                boxes=sorted_boxes,
+                count=count,
+                query_hint=query_hint,
+                marker_style=resolve_marker_style(marker_style),
+            )
+
+        formatter = VisualPrimitiveConverter._get_ref_box_formatter(
+            box_format,
+            marker_style=resolve_marker_style(marker_style),
+        )
         return (
             "1. Analyzing the request\n"
             f"The visual target is {label}.\n"
             "2. Object grounding\n"
-            f"{formatter(label, boxes)}\n"
+            f"{formatter(label, sorted_boxes)}\n"
             "3. Conclusion\n"
             f"There are {count} {label} in this image."
         )

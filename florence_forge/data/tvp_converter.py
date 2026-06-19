@@ -24,8 +24,11 @@ from tqdm import tqdm
 
 from ..core.tasks import get_task_config
 from ..core.visual_primitives import (
+    format_point,
     format_ref_box,
     normalize_bbox,
+    resolve_marker_style,
+    sort_boxes_left_to_right,
 )
 
 logger = logging.getLogger(__name__)
@@ -43,81 +46,103 @@ class TVPChainBuilder:
     """
 
     @staticmethod
+    def _format_point_span(points: List[Tuple[int, int]], marker_style: str = "special") -> str:
+        if not points:
+            return ""
+        return format_point(points, marker_style=resolve_marker_style(marker_style))
+
+    @staticmethod
     def build_maze_chain(
         solvable: bool,
         exploration_points: List[Tuple[int, int]],
         solution_points: Optional[List[Tuple[int, int]]] = None,
         answer: str = "",
+        *,
+        start_point: Optional[Tuple[int, int]] = None,
+        end_point: Optional[Tuple[int, int]] = None,
+        exploration_steps: Optional[List[Dict[str, Any]]] = None,
+        marker_style: str = "special",
     ) -> str:
-        """Build a maze navigation chain-of-thought.
+        """Build a maze navigation chain-of-thought aligned with the TVP paper."""
+        marker_style = resolve_marker_style(marker_style)
+        parts: List[str] = []
 
-        Format:
-          1. Observation
-          I see a maze with walls and passages.
-          2. Exploration
-          <|point|>[[x1,y1],[x2,y2],...]<|/point|>
-          3. Solution
-          [path or conclusion]
-          4. Answer
-          [true/false]
-        """
-        parts = [
-            "1. Observation\nI see a maze with walls and passages.",
-            "2. Exploration\n",
-        ]
-
-        if exploration_points:
-            point_str = ",".join(
-                f"[{x},{y}]" for x, y in exploration_points
+        if start_point and end_point:
+            parts.append(
+                "I'll use a trial-and-error strategy to explore this maze. "
+                f"First locate the starting point: {TVPChainBuilder._format_point_span([start_point], marker_style)}, "
+                f"and the destination: {TVPChainBuilder._format_point_span([end_point], marker_style)}."
             )
-            parts.append(f"<|point|>[{point_str}]<|/point|>")
+            parts.append("**Start Exploring**:")
+        else:
+            parts.extend([
+                "1. Observation\nI see a maze with walls and passages.",
+                "2. Exploration",
+            ])
+
+        if exploration_steps:
+            for index, step in enumerate(exploration_steps, start=1):
+                step_points = [tuple(point) for point in step.get("points", [])]
+                note = str(step.get("note", "")).strip()
+                if step_points:
+                    parts.append(
+                        f"**Step{index}**: {note} "
+                        f"{TVPChainBuilder._format_point_span(step_points, marker_style)}".strip()
+                    )
+                elif note:
+                    parts.append(f"**Step{index}**: {note}")
+        elif exploration_points:
+            parts.append(TVPChainBuilder._format_point_span(exploration_points, marker_style))
 
         if solvable and solution_points:
-            parts.append("\n3. Solution\n")
-            sol_str = ",".join(
-                f"[{x},{y}]" for x, y in solution_points
-            )
-            parts.append(f"<|point|>[{sol_str}]<|/point|>")
-        else:
-            parts.append("\n3. Analysis\nNo valid path exists.")
+            parts.append("**Final Path**: After exploration, the correct route is:")
+            parts.append(TVPChainBuilder._format_point_span(solution_points, marker_style))
+            if end_point:
+                parts.append(
+                    f"Successfully reaching the destination: "
+                    f"{TVPChainBuilder._format_point_span([end_point], marker_style)}!"
+                )
+        elif not solvable:
+            parts.append("**Analysis**: No valid path exists after exhaustive exploration.")
 
-        parts.append(f"\n4. Answer\n{answer}")
-        return "\n".join(parts)
+        parts.append(f"**Answer**\n{answer or ('true' if solvable else 'false')}")
+        return "\n".join(part for part in parts if part)
 
     @staticmethod
     def build_path_chain(
         trajectory_points: List[Tuple[int, int]],
         endpoint: Optional[Tuple[int, int]] = None,
         end_label: str = "",
+        *,
+        start_point: Optional[Tuple[int, int]] = None,
+        marker_style: str = "special",
     ) -> str:
-        """Build a path tracing chain-of-thought.
+        """Build a path tracing chain-of-thought aligned with the TVP paper."""
+        marker_style = resolve_marker_style(marker_style)
+        parts: List[str] = []
 
-        Format:
-          1. Observation
-          I see a path to trace.
-          2. Trajectory
-          <|point|>[[x1,y1],...] <|/point|>
-          3. Endpoint identification
-          [endpoint or label]
-          4. Answer
-          [endpoint label]
-        """
-        parts = [
-            "1. Observation\nI see a path to trace.",
-            "2. Trajectory\n",
-        ]
+        if start_point:
+            parts.append(
+                "I find the starting point you mentioned, it's located here:\n"
+                f"{TVPChainBuilder._format_point_span([start_point], marker_style)}."
+            )
+        else:
+            parts.append("1. Observation\nI see a path to trace.")
 
         if trajectory_points:
-            pt_str = ",".join(f"[{x},{y}]" for x, y in trajectory_points)
-            parts.append(f"<|point|>[{pt_str}]<|/point|>")
+            parts.append(
+                "Following this line, the visual path I observe is:\n"
+                f"{TVPChainBuilder._format_point_span(trajectory_points, marker_style)}"
+            )
 
         if endpoint:
             parts.append(
-                f"\n3. Endpoint identification\n"
-                f"The path ends at <|point|>[[{endpoint[0]},{endpoint[1]}]]<|/point|>"
+                "Following this path, it connects to:\n"
+                f"{TVPChainBuilder._format_point_span([endpoint], marker_style)}."
             )
 
-        parts.append(f"\n4. Answer\n{end_label}")
+        if end_label:
+            parts.append(f"4. Answer\n{end_label}")
         return "\n".join(parts)
 
     @staticmethod
@@ -126,28 +151,63 @@ class TVPChainBuilder:
         boxes: List[List[int]],
         count: int,
         marker_style: str = "special",
+        *,
+        mode: str = "coarse",
+        query_hint: str = "",
     ) -> str:
-        """Build a counting chain-of-thought with VP grounding.
+        """Build coarse-grained counting CoT (batch grounding)."""
+        marker_style = resolve_marker_style(marker_style)
+        sorted_boxes = sort_boxes_left_to_right(boxes)
+        if mode == "fine":
+            return TVPChainBuilder.build_fine_grained_counting_chain(
+                label=label,
+                boxes=sorted_boxes,
+                count=count,
+                query_hint=query_hint,
+                marker_style=marker_style,
+            )
 
-        Format:
-          1. Analyzing the request
-          The visual target is [label].
-          2. Object grounding
-          <|ref|>[label]<|/ref|><|box|>[[x1,y1,x2,y2],...] <|/box|>
-          3. Conclusion
-          There are [count] [label] in this image.
-        """
-        def formatter(lbl, bxs):
-            return (format_ref_box(lbl, bxs, marker_style=marker_style))
+        return (
+            "1. Deconstructing the query\n"
+            f"The user wants me to count the total number of {label} in the image.\n"
+            "2. Sweeping the scene for targets\n"
+            f"Here they are: {format_ref_box(label, sorted_boxes, marker_style=marker_style)}\n"
+            "3. Tallying the group\n"
+            f"The total number is {count}."
+        )
 
+    @staticmethod
+    def build_fine_grained_counting_chain(
+        label: str,
+        boxes: List[List[int]],
+        count: int,
+        *,
+        query_hint: str = "",
+        marker_style: str = "special",
+        instance_notes: Optional[List[str]] = None,
+    ) -> str:
+        """Build fine-grained counting CoT (sequential scan per instance)."""
+        marker_style = resolve_marker_style(marker_style)
+        sorted_boxes = sort_boxes_left_to_right(boxes)
+        intent = query_hint or (
+            f"The question asks me to count the {label}. "
+            "I need to scan the scene and verify each candidate instance."
+        )
         parts = [
-            "1. Analyzing the request\n"
-            f"The visual target is {label}.",
-            "2. Object grounding\n"
-            + formatter(label, boxes),
-            "3. Conclusion\n"
-            f"There are {count} {label} in this image.",
+            f"1. What am I looking for\n{intent}",
+            f"2. Evaluating each {label}",
         ]
+        for index, box in enumerate(sorted_boxes):
+            note = ""
+            if instance_notes and index < len(instance_notes):
+                note = f" {instance_notes[index]}"
+            parts.append(
+                f"- Instance {index + 1}:{note}\n"
+                f"{format_ref_box(label, [box], marker_style=marker_style)}"
+            )
+        parts.append(
+            f"3. Tally\nThere are {count} {label} in this image."
+        )
         return "\n".join(parts)
 
     @staticmethod
@@ -156,28 +216,28 @@ class TVPChainBuilder:
         reasoning: str,
         answer: str,
         supporting_boxes: Optional[Dict[str, List[List[int]]]] = None,
+        *,
+        object_groundings: Optional[List[Tuple[str, List[List[int]], str]]] = None,
         marker_style: str = "special",
     ) -> str:
-        """Build a spatial reasoning chain-of-thought.
-
-        Format:
-          1. Observation
-          [observation]
-          2. Reasoning
-          [reasoning with optional VP grounding]
-          3. Answer
-          [answer]
-        """
+        """Build a spatial reasoning chain-of-thought with optional multi-hop grounding."""
+        marker_style = resolve_marker_style(marker_style)
         parts = [
-            f"1. Observation\n{observation}",
-            "2. Reasoning\n" + reasoning,
+            f"1. Analyzing the request\n{observation}",
+            "2. Reasoning",
         ]
 
-        if supporting_boxes:
-            for lbl, bxs in supporting_boxes.items():
-                parts.append(format_ref_box(lbl, bxs, marker_style=marker_style))
+        if object_groundings:
+            for label, boxes, note in object_groundings:
+                sorted_boxes = sort_boxes_left_to_right(boxes)
+                parts.append(f"- {note}\n{format_ref_box(label, sorted_boxes, marker_style=marker_style)}")
+        else:
+            parts.append(reasoning)
+            if supporting_boxes:
+                for lbl, bxs in supporting_boxes.items():
+                    parts.append(format_ref_box(lbl, sort_boxes_left_to_right(bxs), marker_style=marker_style))
 
-        parts.append(f"3. Answer\n{answer}")
+        parts.append(f"3. Conclusion\n{answer}")
         return "\n".join(parts)
 
 
@@ -236,22 +296,30 @@ class TVPDataConverter:
                 solution_pts = [
                     tuple(p) for p in data.get("solution_points", [])
                 ] if solvable else None
-                answer = "true" if solvable else "false"
+                start_point = tuple(data["start_point"]) if "start_point" in data else None
+                end_point = tuple(data["end_point"]) if "end_point" in data else None
+                exploration_steps = data.get("exploration_steps")
+                answer = data.get("answer") or ("true" if solvable else "false")
 
                 chain = chain_builder.build_maze_chain(
                     solvable=solvable,
                     exploration_points=exploration_pts,
                     solution_points=solution_pts,
                     answer=answer,
+                    start_point=start_point,
+                    end_point=end_point,
+                    exploration_steps=exploration_steps,
+                    marker_style=marker_style,
                 )
 
-                image_path = image_dir / data.get("image", "")
+                image_path = (image_dir / data.get("image", "")).resolve()
                 sample = {
                     "image": str(image_path),
                     "prefix": prompt,
                     "suffix": chain,
                     "task_family": "tvprimitives",
                     "base_task": "maze",
+                    "vp_task_type": task_type,
                     "solvable": solvable,
                     "grid_height": data.get("grid_height", 1),
                     "grid_width": data.get("grid_width", 1),
@@ -298,21 +366,25 @@ class TVPDataConverter:
                     tuple(p) for p in data.get("points", [])
                 ]
                 endpoint = tuple(data["endpoint"]) if "endpoint" in data else None
+                start_point = tuple(data["start_point"]) if "start_point" in data else None
                 end_label = data.get("end_label", "")
 
                 chain = chain_builder.build_path_chain(
                     trajectory_points=trajectory_pts,
                     endpoint=endpoint,
                     end_label=end_label,
+                    start_point=start_point,
+                    marker_style=marker_style,
                 )
 
-                image_path = image_dir / data.get("image", "")
+                image_path = (image_dir / data.get("image", "")).resolve()
                 sample = {
                     "image": str(image_path),
                     "prefix": prompt,
                     "suffix": chain,
                     "task_family": "tvprimitives",
                     "base_task": "path",
+                    "vp_task_type": task_type,
                     "end_label": end_label,
                 }
                 fout.write(json.dumps(sample, ensure_ascii=False) + "\n")
@@ -326,6 +398,7 @@ class TVPDataConverter:
         image_dir: str,
         task_type: str = "COUNT_VP_COT",
         marker_style: str = "special",
+        counting_mode: str = "coarse",
     ) -> None:
         """Convert COCO detection annotations to TVP chain-of-thought counting samples.
 
@@ -368,11 +441,13 @@ class TVPDataConverter:
                     continue
 
                 for label, boxes in grouped.items():
+                    sorted_boxes = sort_boxes_left_to_right(boxes)
                     chain = chain_builder.build_counting_chain(
                         label=label,
-                        boxes=boxes,
-                        count=len(boxes),
+                        boxes=sorted_boxes,
+                        count=len(sorted_boxes),
                         marker_style=marker_style,
+                        mode=counting_mode,
                     )
                     sample = {
                         "image": str(image_path.absolute()),
@@ -380,8 +455,10 @@ class TVPDataConverter:
                         "suffix": chain,
                         "task_family": "tvprimitives",
                         "base_task": "counting",
+                        "vp_task_type": task_type,
                         "count_label": label,
-                        "count": len(boxes),
+                        "count": len(sorted_boxes),
+                        "counting_mode": counting_mode,
                         "vp_marker_style": marker_style,
                     }
                     f.write(json.dumps(sample, ensure_ascii=False) + "\n")
@@ -427,22 +504,25 @@ class TVPDataConverter:
                 reasoning = data.get("reasoning", "")
                 answer = data.get("answer", "")
                 supporting_boxes = data.get("supporting_boxes")
+                object_groundings = data.get("object_groundings")
 
                 chain = chain_builder.build_spatial_chain(
                     observation=observation,
                     reasoning=reasoning,
                     answer=answer,
                     supporting_boxes=supporting_boxes,
+                    object_groundings=object_groundings,
                     marker_style=marker_style,
                 )
 
-                image_path = image_dir / data.get("image", "")
+                image_path = (image_dir / data.get("image", "")).resolve()
                 sample = {
                     "image": str(image_path),
                     "prefix": prompt,
                     "suffix": chain,
                     "task_family": "tvprimitives",
                     "base_task": "spatial",
+                    "vp_task_type": task_type,
                     "answer": answer,
                     "vp_marker_style": marker_style,
                 }
@@ -494,4 +574,7 @@ class TVPDataConverter:
                 logger.warning("Skipping invalid COCO annotation %s: %s", ann, exc)
                 continue
             grouped[str(label).strip()].append(bbox)
-        return dict(grouped)
+        return {
+            label: sort_boxes_left_to_right(boxes)
+            for label, boxes in grouped.items()
+        }

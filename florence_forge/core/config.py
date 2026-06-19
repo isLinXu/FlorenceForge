@@ -57,9 +57,14 @@ class LoRAConfig(WarnOnUnknownFieldsModel):
     target_modules: List[str] = Field(
         default_factory=lambda: [
             "q_proj", "k_proj", "v_proj", "o_proj",
-            "gate_proj", "up_proj", "down_proj",
+            "fc1", "fc2",
         ],
-        description="注入 LoRA 的目标模块名称列表",
+        description="LoRA 注入目标模块列表。BART 架构使用 q/k/v/o_proj + fc1/fc2；"
+                    "LLaMA 等架构使用 gate/up/down_proj",
+    )
+    modules_to_save: List[str] = Field(
+        default_factory=lambda: ["lm_head", "embed_tokens"],
+        description="当添加新 token 时需要完整训练的模块（如 lm_head, embed_tokens）",
     )
     lora_dropout: float = Field(
         default=0.05, ge=0.0, lt=1.0,
@@ -147,6 +152,16 @@ class ModelConfig(WarnOnUnknownFieldsModel):
     use_fp16: bool = Field(default=False, description="向后兼容：是否优先使用 FP16")
     use_bf16: bool = Field(default=False, description="向后兼容：是否优先使用 BF16")
 
+    # Visual primitives & agentic tokens
+    enable_visual_primitives: bool = Field(
+        default=False,
+        description="启用视觉原语特殊 token（<|box|>, <|point|> 等）并 resize embeddings",
+    )
+    enable_agentic_tokens: bool = Field(
+        default=False,
+        description="启用 Agentic 元认知 token（<PLAN>, <ACT>, <VERIFY> 等）并 resize embeddings",
+    )
+
     # ----------------------------------
     # 字段级校验
     # ----------------------------------
@@ -195,12 +210,17 @@ class ModelConfig(WarnOnUnknownFieldsModel):
     @field_validator("backend_name")
     @classmethod
     def _check_backend_name(cls, v: str) -> str:
-        allowed_prefixes = {
-            "florence-2", "florence2",
-            "paligemma", "generic-hf", "auto", "hf",
-            "youtuvl", "youtu-vl",
-        }
-        # 允许任意值，但警告未识别的后端
+        # 通过注册表别名映射验证后端名称
+        from .backends.base_vlm import VLMBackendRegistry
+        resolved = VLMBackendRegistry._resolve_name(v)
+        if resolved != v.lower().strip():
+            # 用户使用了别名，提示规范名
+            import warnings
+            warnings.warn(
+                f"backend_name='{v}' 是别名，规范名为 '{resolved}'。"
+                f"建议在配置中使用规范名。",
+                stacklevel=2,
+            )
         return v
 
     # ----------------------------------

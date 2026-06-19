@@ -22,19 +22,41 @@ class DataValidator:
     """数据验证器
 
     检查数据集的质量、格式和完整性
+
+    Schema 契约
+    ~~~~~~~~~~~~
+    FlorenceForge 定义两种数据 schema：
+
+    1. **Training Schema** (``image/prefix/suffix``) — 唯一的训练消费格式。
+       所有训练器（v1/v2/TVP）均消费此格式。数据转换器（converter_*）
+       的输出也统一为此格式。
+
+    2. **Conversation Schema** (``image/conversations``) — 仅作为数据转换
+       输入格式。当检测到此格式时，验证器会发出提示，建议通过转换器
+       转为 Training Schema 后再用于训练。
+
+    可通过 ``schema_version`` 参数显式指定期望的 schema，避免自动检测
+    的歧义。
     """
 
-    def __init__(self, strict_mode: bool = False):
+    # Schema 版本标识常量
+    SCHEMA_TRAINING = "training"       # image/prefix/suffix
+    SCHEMA_CONVERSATION = "conversation"  # image/conversations
+
+    def __init__(self, strict_mode: bool = False, schema_version: str = ""):
         """初始化验证器
 
         Args:
             strict_mode: 是否启用严格模式
+            schema_version: 期望的 schema 版本 ("training" 或 "conversation")。
+                           为空则自动检测。
         """
         self.strict_mode = strict_mode
+        self.schema_version = schema_version
         self.validation_results = []
         self.error_count = 0
         self.warning_count = 0
-        self._detected_schema: str = ""
+        self._detected_schema: str = schema_version
 
     def validate_dataset(self, data_path: Union[str, Path]) -> Dict[str, Any]:
         """验证数据集
@@ -217,7 +239,7 @@ class DataValidator:
             return True
 
         elif has_conversations or self._detected_schema == "conversations":
-            # Conversations schema
+            # Conversations schema — 仅作为数据转换输入格式
             if not self._detected_schema:
                 self._detected_schema = "conversation"
             required_fields = ["image", "conversations"]
@@ -270,8 +292,8 @@ class DataValidator:
             if task_type and prefix:
                 # 验证任务前缀是否匹配
                 from ..core.tasks import FLORENCE2_TASKS
-                task_config = FLORENCE2_TASKS.get(task_type, {})
-                expected_prompt = task_config.get("prompt", "")
+                task_config = FLORENCE2_TASKS.get(task_type)
+                expected_prompt = task_config.prompt if task_config else ""
                 if expected_prompt and expected_prompt not in prefix:
                     self._add_warning(
                         f"样本{index}: 任务类型 '{task_type}' 的前缀不包含预期提示 '{expected_prompt}'"
@@ -380,6 +402,13 @@ class DataValidator:
         if self._detected_schema:
             result["effective_schema"] = self._detected_schema
             result["detected_schema"] = self._detected_schema
+            # 对 conversation schema 添加转换提示（不影响 validation_results 列表）
+            if self._detected_schema == "conversation":
+                result["schema_note"] = (
+                    "检测到 conversations schema。此格式仅作为数据转换输入格式，"
+                    "训练时需转换为 training schema (image/prefix/suffix)。"
+                    "请使用 data/converter_*.py 转换器进行格式转换。"
+                )
         return result
 
     def reset(self) -> None:

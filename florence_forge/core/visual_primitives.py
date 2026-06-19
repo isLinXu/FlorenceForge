@@ -476,6 +476,30 @@ def _is_valid_coordinate_group(
     return True
 
 
+def resolve_marker_style(marker_style: str) -> str:
+    """Normalize CLI / config marker style names to supported values."""
+
+    normalized = str(marker_style or "special").strip().lower()
+    aliases = {
+        "angle_bracket": "plain",
+        "angle-bracket": "plain",
+        "plain": "plain",
+        "special": "special",
+    }
+    if normalized not in aliases:
+        raise ValueError("marker_style must be 'special' or 'plain'")
+    return aliases[normalized]
+
+
+def sort_boxes_left_to_right(boxes: Iterable[Sequence[int]]) -> List[List[int]]:
+    """Sort normalized boxes from left to right, then top to bottom (TVP convention)."""
+
+    return sorted(
+        [list(map(int, box)) for box in boxes],
+        key=lambda box: (box[0], box[1]),
+    )
+
+
 def format_ref_box_loc_tokens(
     label: str,
     boxes: Iterable[Sequence[int]],

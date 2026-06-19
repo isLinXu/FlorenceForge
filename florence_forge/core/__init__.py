@@ -12,7 +12,8 @@ from .config import (
     EvaluationConfig,
     DistributedConfig,
 )
-from .tasks import FLORENCE2_TASKS
+from .tasks import FLORENCE2_TASKS, is_agentic_task, get_agentic_tasks
+from .agentic_tokens import register_agentic_tokens, AGENTIC_SPECIAL_TOKENS
 
 __all__ = [
     "Florence2MultiTaskModel",
@@ -25,6 +26,10 @@ __all__ = [
     "EvaluationConfig",
     "DistributedConfig",
     "FLORENCE2_TASKS",
+    "is_agentic_task",
+    "get_agentic_tasks",
+    "register_agentic_tokens",
+    "AGENTIC_SPECIAL_TOKENS",
 ]
 
 _LAZY_EXPORTS = {
