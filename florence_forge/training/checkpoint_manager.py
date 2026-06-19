@@ -67,6 +67,7 @@ class CheckpointManager:
         is_best: bool = False,
         async_save: bool = True,
         lora_manager=None,
+        global_step: Optional[int] = None,
     ) -> None:
         """保存检查点
         
@@ -78,6 +79,7 @@ class CheckpointManager:
             is_best: 是否为最佳模型
             async_save: 是否异步保存
             lora_manager: LoRA 管理器（可选，用于持久化 LoRA 状态）
+            global_step: 全局训练步数（可选）
         """
         # 如果设置了 save_best_only 且不是最佳模型，跳过
         if self.save_best_only and not is_best:
@@ -99,6 +101,7 @@ class CheckpointManager:
                 metrics,
                 is_best,
                 lora_manager,
+                global_step,
             )
             logger.info(f"📦 检查点保存任务已提交（异步）：{checkpoint_dir}")
         else:
@@ -111,6 +114,7 @@ class CheckpointManager:
                 metrics,
                 is_best,
                 lora_manager,
+                global_step,
             )
     
     def _do_save_checkpoint(
@@ -122,6 +126,7 @@ class CheckpointManager:
         metrics: Optional[Dict[str, float]],
         is_best: bool,
         lora_manager=None,
+        global_step: Optional[int] = None,
     ) -> None:
         """执行检查点保存（内部方法）
         
@@ -133,6 +138,7 @@ class CheckpointManager:
             metrics: 当前指标
             is_best: 是否为最佳模型
             lora_manager: LoRA 管理器（可选）
+            global_step: 全局训练步数（可选）
         """
         with self._saving_lock:
             checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -142,10 +148,12 @@ class CheckpointManager:
                 'epoch': epoch,
                 'model_state_dict': self._get_model_state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
-                'lr_scheduler_state_dict': lr_scheduler.state_dict(),
+                'lr_scheduler_state_dict': lr_scheduler.state_dict() if lr_scheduler is not None else None,
                 'metrics': metrics or {},
                 'config': self._config_to_dict()
             }
+            if global_step is not None:
+                checkpoint['global_step'] = global_step
             
             # 保存 LoRA 状态到检查点字典（如果提供了 lora_manager）
             if lora_manager is not None:
@@ -304,6 +312,7 @@ class CheckpointManager:
             'epoch': checkpoint.get('epoch', 0),
             'metrics': checkpoint.get('metrics', {}),
             'config': checkpoint.get('config', {}),
+            'global_step': checkpoint.get('global_step', 0),
         }
 
         # Include LoRA state if present in checkpoint
@@ -316,6 +325,45 @@ class CheckpointManager:
             if lora_json.exists() and 'lora_state' not in metadata:
                 with open(lora_json, "r", encoding="utf-8") as f:
                     metadata['lora_state'] = json.load(f)
+
+        return metadata
+
+    def resume_training_state(
+        self,
+        checkpoint_path: Union[str, Path],
+        optimizer: torch.optim.Optimizer,
+        lr_scheduler,
+        training_loop=None,
+        lora_manager=None,
+    ) -> Dict[str, Any]:
+        """Resume training state from a checkpoint.
+
+        Restores optimizer, scheduler, global_step, best_metric, and
+        optionally LoRA state, then returns metadata.
+
+        Args:
+            checkpoint_path: Path to checkpoint directory or .pt file
+            optimizer: Optimizer to restore
+            lr_scheduler: LR scheduler to restore
+            training_loop: TrainingLoop to restore global_step / best_metric
+            lora_manager: LoRA manager to restore adapter state
+
+        Returns:
+            Checkpoint metadata dict
+        """
+        metadata = self.load_checkpoint(
+            checkpoint_path=checkpoint_path,
+            optimizer=optimizer,
+            lr_scheduler=lr_scheduler,
+            lora_manager=lora_manager,
+        )
+
+        if training_loop is not None:
+            gs = metadata.get('global_step', 0)
+            training_loop.global_step = gs
+            metrics = metadata.get('metrics', {})
+            if 'val_loss' in metrics:
+                training_loop.best_metric = metrics['val_loss']
 
         return metadata
     

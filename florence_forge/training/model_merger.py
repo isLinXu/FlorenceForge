@@ -85,7 +85,12 @@ class ModelMerger:
         
         # 兼容：如果传入的是 Florence2MultiTaskModel，提取其内部 PEFT 模型
         from ..core.model import Florence2MultiTaskModel as _Wrapper
+        original_config = None
+        original_backend_name = "florence-2"
+        
         if isinstance(model, _Wrapper):
+            original_config = model.config
+            original_backend_name = getattr(model.config, 'backend_name', 'florence-2')
             peft_model = model.model
         else:
             peft_model = model
@@ -94,12 +99,23 @@ class ModelMerger:
             # 合并并卸载PEFT模型
             merged_hf_model = peft_model.merge_and_unload()
             
-            # 创建新的模型配置
+            # 创建新的模型配置，保留原始后端名称
             merged_config = ModelConfig(
                 model_name=getattr(peft_model.base_model.config, 'name_or_path', 'merged_model'),
                 use_lora=False,  # 合并后的模型不需要LoRA
-                trust_remote_code=True
+                trust_remote_code=True,
+                backend_name=original_backend_name,
             )
+            
+            # 保留原始配置中的设备/精度设置
+            if original_config is not None:
+                for attr in ("device", "torch_dtype", "device_map", "attn_implementation"):
+                    val = getattr(original_config, attr, None)
+                    if val is not None:
+                        try:
+                            setattr(merged_config, attr, val)
+                        except (AttributeError, ValueError):
+                            pass
             
             # 创建Florence2MultiTaskModel实例（使用正常构造函数）
             florence_model = Florence2MultiTaskModel(merged_config)
@@ -272,34 +288,156 @@ class ModelMerger:
             logger.error(f"创建合并模型失败: {e}")
             raise
     
+    @staticmethod
+    def _resolve_base_key(lora_key: str) -> Optional[str]:
+        """将 PEFT LoRA 键名映射回基础模型键名。
+
+        PEFT 键名格式示例::
+
+            base_model.model.encoder.layers.0.self_attn.q_proj.lora_A.weight
+            base_model.model.encoder.layers.0.self_attn.q_proj.lora_B.weight
+
+        需要映射到::
+
+            encoder.layers.0.self_attn.q_proj.weight
+
+        规则:
+        1. 去掉 ``base_model.model.`` 前缀
+        2. 去掉 ``.lora_A`` / ``.lora_B`` / ``.lora_dropout`` 等后缀
+        3. 将 ``.weight`` 附加回去
+        """
+        key = lora_key
+        # 去掉 PEFT 包装前缀
+        for prefix in ("base_model.model.", "base_model.model."):
+            if key.startswith(prefix):
+                key = key[len(prefix):]
+                break
+
+        # 识别并提取 lora_A / lora_B 分量
+        import re
+        match = re.match(r"(.+?)\.lora_([AB])\.weight$", key)
+        if not match:
+            return None  # 不是标准 LoRA 键，跳过
+        base_key = match.group(1)
+        # base_key 现在是如 "encoder.layers.0.self_attn.q_proj"
+        return f"{base_key}.weight"
+
     def _linear_merge(
         self,
         model: Florence2MultiTaskModel,
         lora_weights: Dict[str, torch.Tensor]
     ) -> None:
-        """线性合并LoRA权重"""
+        """线性合并LoRA权重
+
+        支持两种输入格式:
+        1. PEFT 格式 (含 .lora_A./.lora_B.): delta = B @ A
+        2. 简单格式 (直接键名如 'weight'): 直接加到对应参数上
+        """
+        # 先尝试简单格式：直接键名匹配模型参数
         model_state = model.state_dict()
-        
-        for name, lora_weight in lora_weights.items():
-            if name in model_state:
-                # 直接添加LoRA权重
-                model_state[name] += lora_weight
-        
+        merged_count = 0
+
+        for key, delta_tensor in lora_weights.items():
+            # 简单格式：key 直接对应模型参数名
+            if key in model_state and ".lora_" not in key:
+                if model_state[key].shape == delta_tensor.shape:
+                    model_state[key] = model_state[key] + delta_tensor
+                    merged_count += 1
+                    continue
+
+        # 如果简单格式已匹配，跳过 PEFT 格式
+        if merged_count > 0:
+            logger.info(f"线性合并完成（简单格式），合并了 {merged_count} 个权重")
+            model.load_state_dict(model_state)
+            return
+
+        # PEFT 格式：收集 lora_A / lora_B 配对
+        lora_pairs: Dict[str, Dict[str, torch.Tensor]] = {}
+        for key, tensor in lora_weights.items():
+            base_key = self._resolve_base_key(key)
+            if base_key is None:
+                continue
+            if ".lora_A." in key:
+                lora_pairs.setdefault(base_key, {})["A"] = tensor
+            elif ".lora_B." in key:
+                lora_pairs.setdefault(base_key, {})["B"] = tensor
+
+        for base_key, pair in lora_pairs.items():
+            if base_key not in model_state:
+                logger.debug(f"线性合并跳过（基础模型无对应键）: {base_key}")
+                continue
+            if "A" not in pair or "B" not in pair:
+                logger.debug(f"线性合并跳过（缺少 A/B 配对）: {base_key}")
+                continue
+            delta = pair["B"] @ pair["A"]
+            model_state[base_key] = model_state[base_key] + delta
+            merged_count += 1
+
+        if merged_count == 0:
+            logger.warning(
+                "线性合并未合并任何权重——LoRA 键名与基础模型不匹配。"
+                "建议使用 peft 内置的 merge_and_unload() 代替手动合并。"
+            )
+        else:
+            logger.info(f"线性合并完成，合并了 {merged_count} 个权重")
         model.load_state_dict(model_state)
-    
+
     def _weighted_merge(
         self,
         model: Florence2MultiTaskModel,
-        lora_weights: Dict[str, torch.Tensor]
+        lora_weights: Dict[str, torch.Tensor],
+        scaling_factor: float = 1.0,
     ) -> None:
-        """加权合并LoRA权重"""
+        """加权合并LoRA权重
+
+        与 _linear_merge 相同的键名解析逻辑，但支持多适配器加权累加。
+        scaling_factor 缩放 delta 后再加到基础权重上。
+        """
+        # 先尝试简单格式
         model_state = model.state_dict()
-        
-        for name, lora_weight in lora_weights.items():
-            if name in model_state:
-                # 加权合并
-                model_state[name] = model_state[name] + lora_weight
-        
+        merged_count = 0
+
+        for key, delta_tensor in lora_weights.items():
+            if key in model_state and ".lora_" not in key:
+                if model_state[key].shape == delta_tensor.shape:
+                    model_state[key] = model_state[key] + delta_tensor * scaling_factor
+                    merged_count += 1
+                    continue
+
+        if merged_count > 0:
+            logger.info(f"加权合并完成（简单格式, scale={scaling_factor}），合并了 {merged_count} 个权重")
+            model.load_state_dict(model_state)
+            return
+
+        # PEFT 格式
+        lora_pairs: Dict[str, Dict[str, torch.Tensor]] = {}
+        for key, tensor in lora_weights.items():
+            base_key = self._resolve_base_key(key)
+            if base_key is None:
+                continue
+            if ".lora_A." in key:
+                lora_pairs.setdefault(base_key, {})["A"] = tensor
+            elif ".lora_B." in key:
+                lora_pairs.setdefault(base_key, {})["B"] = tensor
+
+        for base_key, pair in lora_pairs.items():
+            if base_key not in model_state:
+                logger.debug(f"加权合并跳过（基础模型无对应键）: {base_key}")
+                continue
+            if "A" not in pair or "B" not in pair:
+                logger.debug(f"加权合并跳过（缺少 A/B 配对）: {base_key}")
+                continue
+            delta = pair["B"] @ pair["A"] * scaling_factor
+            model_state[base_key] = model_state[base_key] + delta
+            merged_count += 1
+
+        if merged_count == 0:
+            logger.warning(
+                "加权合并未合并任何权重——LoRA 键名与基础模型不匹配。"
+                "建议使用 peft 内置的 merge_and_unload() 代替手动合并。"
+            )
+        else:
+            logger.info(f"加权合并完成（scale={scaling_factor}），合并了 {merged_count} 个权重")
         model.load_state_dict(model_state)
     
     def export_merged_model(
@@ -352,7 +490,7 @@ class ModelMerger:
                     export_info = {
                         'export_format': export_format,
                         'model_type': 'florence2_multitask',
-                        'export_timestamp': torch.utils.data.get_worker_info().id if torch.utils.data.get_worker_info() else 'main_process',
+                        'export_timestamp': __import__('datetime').datetime.now().isoformat(),
                         'model_size_mb': self._get_model_size_mb(output_path),
                         'optimized': optimize
                     }

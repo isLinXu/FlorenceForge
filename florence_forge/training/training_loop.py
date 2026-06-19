@@ -4,7 +4,7 @@
 """
 import logging
 import time
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional, Tuple, List, Callable
 from collections import defaultdict
 
 import torch
@@ -60,6 +60,13 @@ class TrainingLoop:
         self.best_metric = float('inf')
         self.patience_counter = 0
         self._train_start_time: Optional[float] = None
+        
+        # NaN/Inf loss tracking
+        self._nan_loss_count = 0
+        self._inf_loss_count = 0
+        
+        # Log hooks
+        self._log_hooks: List = []
     
     def train_epoch(
         self,
@@ -141,6 +148,10 @@ class TrainingLoop:
                 outputs = self.model(**model_inputs)
                 loss = outputs.loss if hasattr(outputs, 'loss') else outputs['loss']
                 if not torch.isfinite(loss).all():
+                    if torch.isnan(loss).any():
+                        self._nan_loss_count += 1
+                    if torch.isinf(loss).any():
+                        self._inf_loss_count += 1
                     logger.warning(
                         "Batch %s loss 非有限值 (%s)；已跳过反传。"
                         "MPS 上可关闭 use_fp16；单样本训练请使用更长的 caption suffix",
@@ -478,3 +489,21 @@ class TrainingLoop:
                 logger.info(f"🛑 早停触发：{patience} 个 epoch 无改善")
                 return True
             return False
+
+    # ------------------------------------------------------------------
+    # Log hooks (v3 enhancement)
+    # ------------------------------------------------------------------
+
+    def add_log_hook(self, hook: Callable[[str, Dict], None]) -> None:
+        """Register a log hook callable(event_name, data_dict)."""
+        if not callable(hook):
+            raise TypeError("hook must be callable")
+        self._log_hooks.append(hook)
+
+    def _emit_log(self, event: str, data: Dict[str, Any]) -> None:
+        """Emit an event to all registered log hooks, swallowing errors."""
+        for hook in self._log_hooks:
+            try:
+                hook(event, data)
+            except Exception as e:
+                logger.debug("Log hook raised, suppressed: %s", e)

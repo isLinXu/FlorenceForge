@@ -28,13 +28,38 @@ logger = logging.getLogger(__name__)
 # Default task-to-teacher routing
 TASK_TO_TEACHER: Dict[str, int] = {
     "counting": 0,
+    "count_vp": 0,
+    "count_vp_cot": 0,
     "spatial": 0,
+    "spatial_vp": 0,
     "grounding": 0,
     "od_vp": 0,
+    "od": 0,
     "phrase_grounding_vp": 0,
     "maze": 1,
+    "maze_vp": 1,
     "path": 1,
+    "path_vp": 1,
 }
+
+
+def resolve_opd_task_type(metadata: Optional[Dict[str, Any]]) -> str:
+    """Normalize task metadata to OPD routing keys."""
+    metadata = metadata or {}
+    aliases = {
+        "count_vp_cot": "counting",
+        "count_vp": "counting",
+        "spatial_vp": "spatial",
+        "phrase_grounding_vp": "grounding",
+        "maze_vp": "maze",
+        "path_vp": "path",
+    }
+    for key in ("task_type", "base_task", "vp_task_type"):
+        value = str(metadata.get(key, "")).strip().lower()
+        if not value:
+            continue
+        return aliases.get(value, value)
+    return ""
 
 
 def compute_distill_loss(
@@ -131,7 +156,8 @@ class OPDTrainer:
 
         # Determine which teacher to use based on task type
         metadata_list = batch.get("metadata", [{}])
-        task_type = metadata_list[0].get("task_type", "") if metadata_list else ""
+        first_meta = metadata_list[0] if metadata_list else {}
+        task_type = resolve_opd_task_type(first_meta if isinstance(first_meta, dict) else {})
         teacher_idx = self.task_routing.get(task_type, None)
 
         teacher_inputs = {k: v for k, v in model_inputs.items() if k != "labels"}

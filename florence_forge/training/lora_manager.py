@@ -668,5 +668,118 @@ class LoRAManager:
         if torch.cuda.is_available():
             stats['gpu_memory_allocated_gb'] = torch.cuda.memory_allocated() / (1024**3)
             stats['gpu_memory_reserved_gb'] = torch.cuda.memory_reserved() / (1024**3)
-        
+
         return stats
+
+    # ------------------------------------------------------------------
+    # Adapter freeze / share / export-import (v3 enhancements)
+    # ------------------------------------------------------------------
+
+    def freeze_adapter(self, model: nn.Module, task_name: str) -> None:
+        """Freeze a LoRA adapter so its weights are no longer updated."""
+        adapter_name = self.active_adapters.get(task_name)
+        if adapter_name is None:
+            logger.warning(f"freeze_adapter: {task_name!r} 没有活跃适配器，跳过")
+            return
+        if not hasattr(self, "_frozen_adapters"):
+            self._frozen_adapters = {}
+        self._frozen_adapters[adapter_name] = True
+        try:
+            peft_model = self._get_peft_target_model(model)
+            for name, param in peft_model.named_parameters():
+                if adapter_name in name and "lora_" in name:
+                    param.requires_grad = False
+        except Exception as e:
+            logger.debug(f"freeze_adapter param-level freeze skipped: {e}")
+        logger.info(f"适配器已冻结: {adapter_name} (任务: {task_name})")
+
+    def unfreeze_adapter(self, model: nn.Module, task_name: str) -> None:
+        """Unfreeze a previously frozen LoRA adapter."""
+        adapter_name = self.active_adapters.get(task_name)
+        if adapter_name is None:
+            logger.warning(f"unfreeze_adapter: {task_name!r} 没有活跃适配器，跳过")
+            return
+        if not hasattr(self, "_frozen_adapters"):
+            self._frozen_adapters = {}
+        self._frozen_adapters[adapter_name] = False
+        try:
+            peft_model = self._get_peft_target_model(model)
+            for name, param in peft_model.named_parameters():
+                if adapter_name in name and "lora_" in name:
+                    param.requires_grad = True
+        except Exception as e:
+            logger.debug(f"unfreeze_adapter param-level unfreeze skipped: {e}")
+        logger.info(f"适配器已解冻: {adapter_name} (任务: {task_name})")
+
+    def unfreeze_all(self, model: nn.Module) -> None:
+        """Unfreeze all adapters."""
+        if not hasattr(self, "_frozen_adapters"):
+            self._frozen_adapters = {}
+        for task_name in list(self.active_adapters.keys()):
+            self.unfreeze_adapter(model, task_name)
+
+    def is_adapter_frozen(self, task_name: str) -> bool:
+        """Return True if the adapter for *task_name* is frozen."""
+        adapter_name = self.active_adapters.get(task_name)
+        if adapter_name is None:
+            return False
+        if not hasattr(self, "_frozen_adapters"):
+            self._frozen_adapters = {}
+        return self._frozen_adapters.get(adapter_name, False)
+
+    def register_shared_adapter(self, source_task: str, target_task: str) -> None:
+        """Register *target_task* to share the adapter of *source_task*."""
+        source_adapter = self.active_adapters.get(source_task)
+        if source_adapter is None:
+            raise ValueError(f"{source_task!r} 没有活跃适配器")
+        if not hasattr(self, "_shared_adapters"):
+            self._shared_adapters = {}
+        self.active_adapters[target_task] = source_adapter
+        self._shared_adapters[target_task] = source_adapter
+        if source_task in self.task_configs:
+            self.task_configs[target_task] = self.task_configs[source_task]
+        logger.info(f"共享适配器注册: {target_task} → {source_adapter} (源: {source_task})")
+
+    def get_shared_adapter_source(self, task_name: str) -> Optional[str]:
+        """Return the source adapter name for a shared task, or None."""
+        if not hasattr(self, "_shared_adapters"):
+            self._shared_adapters = {}
+        return self._shared_adapters.get(task_name)
+
+    def export_state(self) -> Dict[str, Any]:
+        """Export the full manager state for serialization."""
+        if not hasattr(self, "_frozen_adapters"):
+            self._frozen_adapters = {}
+        if not hasattr(self, "_shared_adapters"):
+            self._shared_adapters = {}
+        return {
+            "active_adapters": dict(self.active_adapters),
+            "frozen_adapters": dict(self._frozen_adapters),
+            "shared_adapters": dict(self._shared_adapters),
+            "task_configs": {
+                k: v.model_dump() if hasattr(v, "model_dump") else dict(v)
+                for k, v in self.task_configs.items()
+            },
+            "base_config": (
+                self.base_config.model_dump()
+                if hasattr(self.base_config, "model_dump")
+                else dict(self.base_config or {})
+            ),
+        }
+
+    def import_state(self, state: Dict[str, Any]) -> None:
+        """Import a previously exported manager state."""
+        self.active_adapters = dict(state.get("active_adapters", {}))
+        self._frozen_adapters = dict(state.get("frozen_adapters", {}))
+        self._shared_adapters = dict(state.get("shared_adapters", {}))
+        task_cfgs = state.get("task_configs", {})
+        self.task_configs = {}
+        for k, v in task_cfgs.items():
+            if isinstance(v, dict):
+                self.task_configs[k] = ForgeLoRAConfig(**v)
+            else:
+                self.task_configs[k] = v
+        base = state.get("base_config")
+        if isinstance(base, dict):
+            self.base_config = ForgeLoRAConfig(**base)
+        logger.info(f"LoRA 管理器状态已导入: {len(self.active_adapters)} 个活跃适配器")
