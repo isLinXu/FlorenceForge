@@ -57,6 +57,10 @@ def build_experiment_plan(args: argparse.Namespace) -> Dict[str, Any]:
         Path(args.distillation_mix_output_dir).expanduser()
         if args.distillation_mix_output_dir else output_dir / "distillation_mix"
     )
+    count_aware_distillation_output_dir = (
+        Path(args.count_aware_distillation_output_dir).expanduser()
+        if args.count_aware_distillation_output_dir else output_dir / "count_aware_distillation"
+    )
     policy_sweep_output_dir = (
         Path(args.policy_sweep_output_dir).expanduser()
         if args.policy_sweep_output_dir else output_dir / "policy_sweep"
@@ -70,16 +74,71 @@ def build_experiment_plan(args: argparse.Namespace) -> Dict[str, Any]:
     training_summary_path = Path(args.training_summary).expanduser()
     manifest_path = Path(args.manifest_path).expanduser()
     adapter_dir = args.adapter_dir
-    include_grounding = bool(args.include_grounding or args.run_distillation_mix)
+    include_grounding = bool(args.include_grounding or args.run_distillation_mix or args.run_count_aware_distillation)
     effective_grounding_train_path = args.grounding_train_path
     distillation_mix_base_inputs = list(args.distillation_mix_base_input or [])
     if args.run_distillation_mix and not distillation_mix_base_inputs and args.grounding_train_path:
         distillation_mix_base_inputs = [args.grounding_train_path]
+    distillation_mix_inputs = list(args.distillation_mix_input or [])
+    count_aware_distillation_output_path: Optional[Path] = None
+    count_aware_distillation_summary_path: Optional[Path] = None
+    count_aware_distillation_markdown_path: Optional[Path] = None
     distillation_mix_output_path: Optional[Path] = None
     distillation_mix_summary_path: Optional[Path] = None
     distillation_mix_markdown_path: Optional[Path] = None
 
     commands: List[Dict[str, Any]] = []
+
+    if args.run_count_aware_distillation:
+        count_aware_distillation_output_path = (
+            Path(args.count_aware_distillation_output).expanduser()
+            if args.count_aware_distillation_output
+            else count_aware_distillation_output_dir / "query_ovd_count_aware_distill.jsonl"
+        )
+        count_aware_distillation_summary_path = (
+            Path(args.count_aware_distillation_summary_output).expanduser()
+            if args.count_aware_distillation_summary_output
+            else _default_jsonl_summary_path(count_aware_distillation_output_path)
+        )
+        count_aware_distillation_markdown_path = (
+            Path(args.count_aware_distillation_markdown_output).expanduser()
+            if args.count_aware_distillation_markdown_output
+            else count_aware_distillation_summary_path.with_suffix(".md")
+        )
+        commands.append({
+            "name": "build_count_aware_distillation",
+            "cmd": _build_count_aware_distillation_cmd(
+                inference_summary=args.count_aware_distillation_summary,
+                output=str(count_aware_distillation_output_path),
+                summary_output=str(count_aware_distillation_summary_path),
+                markdown_output=str(count_aware_distillation_markdown_path),
+                text_input_template=args.count_aware_text_input_template,
+                focus_bucket=args.count_aware_focus_bucket,
+                min_missing_boxes=args.count_aware_min_missing_boxes,
+                min_false_negatives=args.count_aware_min_false_negatives,
+                max_rows=args.count_aware_max_rows,
+                include_non_undergenerated=args.count_aware_include_non_undergenerated,
+                distillation_target_mode=args.count_aware_target_mode,
+                structured_box_format=args.structured_vp_box_format,
+                structured_marker_style=args.structured_vp_marker_style,
+                structured_filter_policy=args.structured_vp_filter_policy,
+                structured_max_total_boxes_field=args.structured_vp_max_total_boxes_field,
+                structured_nms_iou_threshold=args.structured_vp_nms_iou_threshold,
+                structured_allowed_labels=args.structured_vp_allowed_labels,
+                structured_allowed_labels_field=args.structured_vp_allowed_labels_field,
+                structured_allowed_label_match_mode=args.structured_vp_allowed_label_match_mode,
+                structured_repair_malformed_tail=args.structured_vp_repair_malformed_tail,
+                label_match_mode=args.vp_label_match_mode,
+                iou_threshold=args.quality_iou_threshold,
+            ),
+            "output_path": str(count_aware_distillation_output_path),
+            "summary_path": str(count_aware_distillation_summary_path),
+            "markdown_path": str(count_aware_distillation_markdown_path),
+        })
+        if args.run_distillation_mix:
+            distillation_mix_inputs.append(str(count_aware_distillation_output_path))
+        else:
+            effective_grounding_train_path = str(count_aware_distillation_output_path)
 
     if args.run_distillation_mix:
         distillation_mix_output_path = (
@@ -102,7 +161,7 @@ def build_experiment_plan(args: argparse.Namespace) -> Dict[str, Any]:
             "name": "build_distillation_mix",
             "cmd": _build_distillation_mix_cmd(
                 base_inputs=distillation_mix_base_inputs,
-                distillation_inputs=args.distillation_mix_input,
+                distillation_inputs=distillation_mix_inputs,
                 output=str(distillation_mix_output_path),
                 summary_output=str(distillation_mix_summary_path),
                 markdown_output=str(distillation_mix_markdown_path),
@@ -635,11 +694,33 @@ def build_experiment_plan(args: argparse.Namespace) -> Dict[str, Any]:
         "policy_comparison_summary": str(policy_comparison_summary_path) if args.run_policy_comparison else None,
         "record_comparison_focus_bucket": args.record_comparison_focus_bucket,
         "record_comparison_summary": str(record_comparison_summary_path) if args.run_record_comparison else None,
+        "count_aware_distillation_output": (
+            str(count_aware_distillation_output_path) if count_aware_distillation_output_path else None
+        ),
+        "count_aware_distillation_summary": (
+            str(count_aware_distillation_summary_path) if count_aware_distillation_summary_path else None
+        ),
+        "count_aware_distillation_markdown": (
+            str(count_aware_distillation_markdown_path) if count_aware_distillation_markdown_path else None
+        ),
+        "count_aware_distillation_source_summary": (
+            args.count_aware_distillation_summary if args.run_count_aware_distillation else None
+        ),
+        "count_aware_text_input_template": (
+            args.count_aware_text_input_template if args.run_count_aware_distillation else None
+        ),
+        "count_aware_focus_bucket": args.count_aware_focus_bucket if args.run_count_aware_distillation else None,
+        "count_aware_min_missing_boxes": (
+            args.count_aware_min_missing_boxes if args.run_count_aware_distillation else None
+        ),
+        "count_aware_min_false_negatives": (
+            args.count_aware_min_false_negatives if args.run_count_aware_distillation else None
+        ),
         "distillation_mix_output": str(distillation_mix_output_path) if distillation_mix_output_path else None,
         "distillation_mix_summary": str(distillation_mix_summary_path) if distillation_mix_summary_path else None,
         "distillation_mix_markdown": str(distillation_mix_markdown_path) if distillation_mix_markdown_path else None,
         "distillation_mix_base_inputs": distillation_mix_base_inputs if args.run_distillation_mix else [],
-        "distillation_mix_inputs": list(args.distillation_mix_input or []) if args.run_distillation_mix else [],
+        "distillation_mix_inputs": distillation_mix_inputs if args.run_distillation_mix else [],
         "distillation_mix_repeat": args.distillation_mix_repeat if args.run_distillation_mix else None,
         "distillation_mix_repeat_order": args.distillation_mix_repeat_order if args.run_distillation_mix else None,
         "distillation_mix_placement": args.distillation_mix_placement if args.run_distillation_mix else None,
@@ -707,6 +788,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--record-comparison-output-dir", default=None)
     parser.add_argument("--target-count-gap-output-dir", default=None)
     parser.add_argument("--distillation-mix-output-dir", default=None)
+    parser.add_argument("--count-aware-distillation-output-dir", default=None)
     parser.add_argument("--policy-sweep-output-dir", default=None)
     parser.add_argument("--report-card-output-dir", default=None)
     parser.add_argument("--run-training", action="store_true")
@@ -716,6 +798,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--run-policy-comparison", action="store_true")
     parser.add_argument("--run-record-comparison", action="store_true")
     parser.add_argument("--run-target-count-gap-analysis", action="store_true")
+    parser.add_argument("--run-count-aware-distillation", action="store_true")
     parser.add_argument("--run-distillation-mix", action="store_true")
     parser.add_argument("--run-policy-sweep", action="store_true")
     parser.add_argument("--run-report-card", action="store_true")
@@ -869,6 +952,27 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument("--distillation-mix-shuffle", action="store_true")
     parser.add_argument("--distillation-mix-seed", type=int, default=0)
+    parser.add_argument(
+        "--count-aware-distillation-summary",
+        default=None,
+        help=(
+            "Previous vp_inference_visualization_summary.json used to mine target-count-aware "
+            "hard positives before training."
+        ),
+    )
+    parser.add_argument("--count-aware-distillation-output", default=None)
+    parser.add_argument("--count-aware-distillation-summary-output", default=None)
+    parser.add_argument("--count-aware-distillation-markdown-output", default=None)
+    parser.add_argument(
+        "--count-aware-text-input-template",
+        default="{label} | target_count={query_box_count} | predicted={pred_box_count} | missing={missing_box_count}",
+    )
+    parser.add_argument("--count-aware-focus-bucket", default="dense", choices=["single", "medium", "dense"])
+    parser.add_argument("--count-aware-min-missing-boxes", type=int, default=1)
+    parser.add_argument("--count-aware-min-false-negatives", type=int, default=1)
+    parser.add_argument("--count-aware-max-rows", type=int, default=None)
+    parser.add_argument("--count-aware-include-non-undergenerated", action="store_true")
+    parser.add_argument("--count-aware-target-mode", default="reference", choices=["reference", "prediction"])
     parser.add_argument("--device", default="auto", choices=["auto", "mps", "cuda", "cpu"])
     parser.add_argument("--torch-dtype", default="float32", choices=["auto", "float32", "float16", "bfloat16"])
     parser.add_argument("--max-new-tokens", type=int, default=96)
@@ -1017,8 +1121,12 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         args.include_grounding = True
         if not args.distillation_mix_base_input and not args.grounding_train_path:
             parser.error("--run-distillation-mix requires --distillation-mix-base-input or --grounding-train-path")
-        if not args.distillation_mix_input:
-            parser.error("--run-distillation-mix requires --distillation-mix-input")
+        if not args.distillation_mix_input and not args.run_count_aware_distillation:
+            parser.error("--run-distillation-mix requires --distillation-mix-input or --run-count-aware-distillation")
+    if args.run_count_aware_distillation:
+        args.include_grounding = True
+        if not args.count_aware_distillation_summary:
+            parser.error("--run-count-aware-distillation requires --count-aware-distillation-summary")
     if args.grounding_min_query_boxes is not None or args.grounding_max_query_boxes is not None:
         args.include_grounding = True
     if args.grounding_count_hint_template:
@@ -1326,6 +1434,82 @@ def _build_target_count_gap_cmd(
     ]
     if focus_bucket:
         cmd.extend(["--focus-bucket", focus_bucket])
+    return cmd
+
+
+def _build_count_aware_distillation_cmd(
+    *,
+    inference_summary: str,
+    output: str,
+    summary_output: str,
+    markdown_output: str,
+    text_input_template: str,
+    focus_bucket: str,
+    min_missing_boxes: int,
+    min_false_negatives: int,
+    max_rows: Optional[int],
+    include_non_undergenerated: bool,
+    distillation_target_mode: str,
+    structured_box_format: str,
+    structured_marker_style: str,
+    structured_filter_policy: str,
+    structured_max_total_boxes_field: Optional[str],
+    structured_nms_iou_threshold: Optional[float],
+    structured_allowed_labels: Optional[str],
+    structured_allowed_labels_field: Optional[str],
+    structured_allowed_label_match_mode: str,
+    structured_repair_malformed_tail: bool,
+    label_match_mode: str,
+    iou_threshold: float,
+) -> List[str]:
+    cmd = [
+        sys.executable,
+        "scripts/data-conversion/build_vp_count_aware_distillation.py",
+        "--inference-summary",
+        inference_summary,
+        "--output",
+        output,
+        "--summary-output",
+        summary_output,
+        "--markdown-output",
+        markdown_output,
+        "--text-input-template",
+        text_input_template,
+        "--focus-bucket",
+        focus_bucket,
+        "--min-missing-boxes",
+        str(min_missing_boxes),
+        "--min-false-negatives",
+        str(min_false_negatives),
+        "--distillation-target-mode",
+        distillation_target_mode,
+        "--structured-vp-box-format",
+        structured_box_format,
+        "--structured-vp-marker-style",
+        structured_marker_style,
+        "--structured-vp-filter-policy",
+        structured_filter_policy,
+        "--quality-iou-threshold",
+        str(iou_threshold),
+    ]
+    if max_rows is not None:
+        cmd.extend(["--max-rows", str(max_rows)])
+    if include_non_undergenerated:
+        cmd.append("--include-non-undergenerated")
+    if structured_max_total_boxes_field:
+        cmd.extend(["--structured-vp-max-total-boxes-field", structured_max_total_boxes_field])
+    if structured_nms_iou_threshold is not None:
+        cmd.extend(["--structured-vp-nms-iou-threshold", str(structured_nms_iou_threshold)])
+    if structured_allowed_labels:
+        cmd.extend(["--structured-vp-allowed-labels", structured_allowed_labels])
+    if structured_allowed_labels_field:
+        cmd.extend(["--structured-vp-allowed-labels-field", structured_allowed_labels_field])
+    if structured_allowed_label_match_mode != "strict":
+        cmd.extend(["--structured-vp-allowed-label-match-mode", structured_allowed_label_match_mode])
+    if structured_repair_malformed_tail:
+        cmd.append("--structured-vp-repair-malformed-tail")
+    if label_match_mode != "strict":
+        cmd.extend(["--vp-label-match-mode", label_match_mode])
     return cmd
 
 

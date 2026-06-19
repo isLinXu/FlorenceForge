@@ -271,6 +271,87 @@ def test_vp_experiment_runner_dry_run_can_plan_distillation_mix_before_training(
     assert summary["distillation_mix_placement"] == "prepend"
 
 
+def test_vp_experiment_runner_dry_run_can_plan_count_aware_distillation_before_mix(tmp_path):
+    output_dir = tmp_path / "experiment"
+    base_path = tmp_path / "base_grounding.jsonl"
+    source_summary = tmp_path / "old_adapter_summary.json"
+    base_path.write_text("", encoding="utf-8")
+    source_summary.write_text(json.dumps({"records": []}), encoding="utf-8")
+    script = Path("scripts/experiments/run_florence_vp_training_experiment.py")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--dry-run",
+            "--run-count-aware-distillation",
+            "--count-aware-distillation-summary",
+            str(source_summary),
+            "--count-aware-text-input-template",
+            "{label} count={query_box_count} missing={missing_box_count}",
+            "--count-aware-min-missing-boxes",
+            "2",
+            "--run-distillation-mix",
+            "--run-training",
+            "--skip-baseline",
+            "--model-path",
+            str(tmp_path / "model"),
+            "--grounding-train-path",
+            str(base_path),
+            "--distillation-mix-repeat",
+            "2",
+            "--distillation-mix-repeat-order",
+            "round_robin",
+            "--distillation-mix-placement",
+            "interleave",
+            "--distillation-mix-min-delta-tp",
+            "1",
+            "--distillation-mix-target-mode",
+            "reference",
+            "--output-dir",
+            str(output_dir),
+            "--device",
+            "cpu",
+        ],
+        cwd=Path.cwd(),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    summary = json.loads(result.stdout)
+    names = [command["name"] for command in summary["commands"]]
+    assert names == [
+        "build_count_aware_distillation",
+        "build_distillation_mix",
+        "train_adapter",
+        "infer_adapter",
+        "audit",
+    ]
+
+    count_output = output_dir / "count_aware_distillation" / "query_ovd_count_aware_distill.jsonl"
+    mix_output = output_dir / "distillation_mix" / "query_ovd_distill_mix.jsonl"
+    count_cmd = summary["commands"][0]["cmd"]
+    mix_cmd = summary["commands"][1]["cmd"]
+    train_cmd = summary["commands"][2]["cmd"]
+    assert "scripts/data-conversion/build_vp_count_aware_distillation.py" in count_cmd
+    assert "--inference-summary" in count_cmd
+    assert str(source_summary) in count_cmd
+    assert "--text-input-template" in count_cmd
+    assert "{label} count={query_box_count} missing={missing_box_count}" in count_cmd
+    assert "--min-missing-boxes" in count_cmd
+    assert "2" in count_cmd
+    assert "--distillation-input" in mix_cmd
+    assert str(count_output) in mix_cmd
+    assert "--grounding-train-path" in train_cmd
+    assert str(mix_output) in train_cmd
+    assert summary["count_aware_distillation_output"] == str(count_output)
+    assert summary["count_aware_distillation_source_summary"] == str(source_summary)
+    assert summary["distillation_mix_inputs"] == [str(count_output)]
+    assert summary["grounding_train_path"] == str(mix_output)
+
+
 def test_vp_experiment_runner_dry_run_can_plan_query_grounding_data_key(tmp_path):
     output_dir = tmp_path / "experiment"
     script = Path("scripts/experiments/run_florence_vp_training_experiment.py")
