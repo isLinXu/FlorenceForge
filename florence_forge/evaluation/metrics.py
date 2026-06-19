@@ -833,8 +833,9 @@ class VisualPrimitiveDetectionMetrics(DetectionMetrics):
     ref 覆盖率、结构化解码等指标。
     """
 
-    def __init__(self):
+    def __init__(self, task_type: str = "OD_VP"):
         super().__init__()
+        self.task_type = task_type
         self._vp_format_valid = 0
         self._vp_coordinate_valid = 0
         self._vp_ref_covered = 0

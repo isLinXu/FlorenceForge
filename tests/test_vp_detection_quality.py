@@ -22,6 +22,7 @@ from florence_forge.evaluation.vp_report_card import (
     build_vp_report_card,
     render_vp_report_card_markdown,
 )
+from florence_forge.evaluation.metrics import VisualPrimitiveDetectionMetrics
 
 
 def test_vp_detection_quality_matches_by_label_and_iou():
@@ -41,6 +42,20 @@ def test_vp_detection_quality_matches_by_label_and_iou():
     assert result["false_positives"] == 1
     assert result["false_negatives"] == 1
     assert result["mean_matched_iou"] == 1.0
+
+
+def test_visual_primitive_detection_metrics_accepts_legacy_task_type():
+    metrics = VisualPrimitiveDetectionMetrics("OD_VP")
+
+    metrics.add_batch(
+        ["cat<loc_0><loc_0><loc_100><loc_100>"],
+        ["cat<loc_0><loc_0><loc_100><loc_100>"],
+    )
+    result = metrics.compute()
+
+    assert metrics.task_type == "OD_VP"
+    assert result["precision"] == 1.0
+    assert result["recall"] == 1.0
 
 
 def test_evaluate_vp_detection_quality_reports_overgeneration_and_single_target_hits():
