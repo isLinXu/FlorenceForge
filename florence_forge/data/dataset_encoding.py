@@ -20,8 +20,8 @@ def get_task_prompt(task_type: str, backend: Any) -> str:
             return backend.get_task_prompt(task_type)
         except Exception:
             pass
-    task_config = FLORENCE2_TASKS.get(task_type, {})
-    return task_config.get("prompt", "")
+    task_config = FLORENCE2_TASKS.get(task_type)
+    return task_config.prompt if task_config else ""
 
 
 def build_prompt_and_answer(
@@ -240,7 +240,12 @@ def encode_training_sample(
     processor: Any,
     backend: Any,
 ) -> Dict[str, Any]:
-    """将单张图像 + 样本编码为训练用字典。"""
+    """将单张图像 + 样本编码为训练用字典。
+
+    If the sample suffix contains agentic meta-cognitive tokens, a
+    ``loss_weights`` tensor is added to the output for phase-aware
+    loss weighting during training.
+    """
     prompt, answer = build_prompt_and_answer(sample, backend=backend)
     prompt_text = prompt or sample.prefix or get_task_prompt(sample.task_type, backend)
 
@@ -252,9 +257,10 @@ def encode_training_sample(
         answer=answer,
     )
     if backend_result is not None:
+        _maybe_add_phase_weights(backend_result, answer, processor, sample)
         return backend_result
 
-    return _encode_via_processor(
+    result = _encode_via_processor(
         processor=processor,
         backend=backend,
         image=image,
@@ -263,3 +269,46 @@ def encode_training_sample(
         answer=answer,
         prompt_text=prompt_text,
     )
+    _maybe_add_phase_weights(result, answer, processor, sample)
+    return result
+
+
+def _maybe_add_phase_weights(
+    result: Dict[str, Any],
+    answer: str,
+    processor: Any,
+    sample: TaskSample,
+) -> None:
+    """Add ``loss_weights`` to result if the answer contains agentic tokens.
+
+    This is a no-op for non-agentic samples, so it has zero overhead
+    for standard Florence-2 training.
+    """
+    # Quick check: does the answer contain any agentic token?
+    if "<PLAN>" not in answer and "<ACT>" not in answer and "<DECIDE>" not in answer:
+        return
+
+    labels = result.get("labels")
+    if labels is None or not hasattr(labels, "shape"):
+        return
+
+    tokenizer = getattr(processor, "tokenizer", None) or getattr(
+        processor, "text_processor", None
+    )
+    if tokenizer is None:
+        return
+
+    try:
+        from .phase_aware_loss import build_phase_weight_tensor
+
+        labels_1d = labels.squeeze(0) if labels.dim() > 1 else labels
+        weights = build_phase_weight_tensor(
+            labels=labels_1d,
+            answer_text=answer,
+            tokenizer=tokenizer,
+        )
+        if labels.dim() > 1:
+            weights = weights.unsqueeze(0)
+        result["loss_weights"] = weights
+    except Exception as exc:
+        logger.debug("Phase-aware weight computation skipped: %s", exc)
