@@ -3377,6 +3377,496 @@ scripts/experiments/run_florence_vp_training_experiment.py --run-distillation-mi
 3. 对比 `teacher` 与 `reference` target-mode，判断是学习后处理行为更稳，还是 hard-example 完整监督更有效。
 4. 若继续无变化，转向更强 proposal teacher 或训练参数消融，例如 LoRA rank、modules_to_save、学习率、dense-only curriculum。
 
+### 5.37 12-step distillation interleave 复验
+
+本轮继续执行 5.36 的剩余任务：用 runner 内置的 distillation mix 预步骤，跑一个更长但仍保守的真实训练，并用 dense16 同口径比较判断 proposal distillation 是否已经带来收益。
+
+#### 5.37.1 训练入口兼容修复
+
+首次启动 12-step 实验时，训练在 reference metric 初始化处失败：
+
+```text
+TypeError: __init__() takes 1 positional argument but 2 were given
+```
+
+根因是 `scripts/smoke/real_florence_vp_training_smoke.py` 仍按旧接口调用：
+
+```text
+VisualPrimitiveDetectionMetrics("OD_VP")
+```
+
+而当前 `florence_forge/evaluation/metrics.py` 里的 `VisualPrimitiveDetectionMetrics` 已变为无参构造。本轮做了向后兼容修复：
+
+```text
+VisualPrimitiveDetectionMetrics(task_type: str = "OD_VP")
+```
+
+这样旧式 `"OD_VP"` 调用和新式无参调用都可用；并补了单测覆盖旧式构造。
+
+#### 5.37.2 12-step interleave 实验
+
+实验目录：
+
+```text
+.codex_reports/florence_vp_distill_grid_oracle120_12step_interleave_20260619
+```
+
+mix 设置：
+
+| item | value |
+| --- | --- |
+| base rows | `16` |
+| distillation rows | `18` |
+| distillation ratio | `0.5294` |
+| target mode | `teacher` |
+| repeat order | `round_robin` |
+| placement | `interleave` |
+
+训练结果：
+
+| item | value |
+| --- | ---: |
+| steps executed | `12` |
+| final loss | `5.7463` |
+| trainable param delta norm | `0.1045` |
+| train sec / total sec | `157.492 / 178.631` |
+
+runner 完整通过：
+
+```text
+build_distillation_mix -> train_adapter -> infer_adapter -> audit -> quality_adapter -> target_count_gap_adapter -> policy_sweep_adapter -> report_card_adapter
+```
+
+空间处理：
+
+```text
+cleanup requested=true, deleted=true
+```
+
+也就是说，本轮 adapter 已在审计后删除，只保留 JSON、Markdown 和可视化产物。
+
+#### 5.37.3 dense16 report-card
+
+adapter quality：
+
+```text
+.codex_reports/florence_vp_distill_grid_oracle120_12step_interleave_20260619/quality/adapter/vp_detection_quality.json
+```
+
+report-card：
+
+```text
+.codex_reports/florence_vp_distill_grid_oracle120_12step_interleave_20260619/report_card/adapter/vp_report_card.json
+```
+
+结果：
+
+| samples | precision | recall | F1 | TP/FP/FN | avg pred / GT | undergen | overgen |
+| ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: |
+| `16` | `0.7778` | `0.3828` | `0.5131` | `49/14/79` | `3.9375 / 8.0000` | `0.7500` | `0.0000` |
+
+report-card 仍为：
+
+```text
+status=fail, readiness=needs_work
+```
+
+主要失败项：
+
+- precision `0.7778 < 0.8000`
+- recall `0.3828 < 0.7000`
+- F1 `0.5131 < 0.7500`
+- undergeneration `0.7500 > 0.3500`
+- raw VP wrapper internalization `0.0`
+- structured decoder dependency `1.0`
+
+target-count gap：
+
+| item | value |
+| --- | ---: |
+| current F1 | `0.5131` |
+| oracle count-fill F1 | `0.8906` |
+| recoverable FN | `65 / 79` |
+| recall gap closure | `0.8228` |
+| records with deficit | `12 / 16` |
+
+这说明 12-step interleave 仍没有解决 dense 多实例欠生成，且大部分 FN 仍落在 count/proposal 可恢复区域。
+
+#### 5.37.4 dense16 prefix comparison
+
+同口径比较产物：
+
+```text
+.codex_reports/florence_vp_distill_grid_oracle120_12step_interleave_20260619/prefix_comparison_dense16/vp_quality_prefix_comparison.json
+.codex_reports/florence_vp_distill_grid_oracle120_12step_interleave_20260619/record_comparison_vs_old_adapter/vp_record_comparison.json
+```
+
+dense16 prefix 结果：
+
+| report | precision | recall | F1 | TP/FP/FN | avg pred | delta F1 vs old adapter |
+| --- | ---: | ---: | ---: | --- | ---: | ---: |
+| old adapter | `0.7576` | `0.3906` | `0.5155` | `50/16/78` | `4.1250` | `0.0000` |
+| old baseline | `0.7463` | `0.3906` | `0.5128` | `50/17/78` | `4.1875` | `-0.0026` |
+| distill 12-step | `0.7778` | `0.3828` | `0.5131` | `49/14/79` | `3.9375` | `-0.0024` |
+
+逐记录变化：
+
+| item | value |
+| --- | ---: |
+| unchanged records | `14` |
+| precision-improved records | `1` |
+| recall-regressed records | `1` |
+| delta TP / FP / FN | `-1 / -2 / +1` |
+| undergeneration fixed records | `0` |
+
+解释：
+
+1. 12-step distillation interleave 没有带来稳定质量增益；它主要减少少量 FP，同时丢掉 1 个 TP。
+2. dense undergeneration 完全没有被修复，`undergeneration_fixed_records=0`。
+3. proposal teacher 的 hard positives 以当前形式没有成功迁移到 raw Florence generation；模型仍主要沿用 Florence native OVD 的短输出先验。
+4. 因此，继续把同一份 `teacher` distillation mix 从 12 step 机械拉到更长，不是最高优先级。
+
+更新后的下一步建议：
+
+1. 不再优先扩大当前 `teacher` mix 的训练步数；先构造 `reference` target-mode distillation，让 hard positives 监督完整 GT，而不是监督 teacher partial output。
+2. 降低 distillation ratio 或引入 curriculum：先 base dense 稳定，再少量 hard positives，而不是 52.94% hard-positive 混合。
+3. 做训练参数消融：LoRA rank、`modules_to_save`、学习率；当前 delta norm 证明参数在变，但输出分布几乎不变。
+4. 若继续走 proposal 路线，优先提升 proposal teacher 质量，减少 replay 中 FP 噪声，否则训练可能学习到“少生成更安全”的策略。
+
+### 5.38 reference-mode low-ratio distillation 复验
+
+本轮继续执行 5.37 的下一步建议：把 hard-positive distillation 从 `teacher` target-mode 改为 `reference` target-mode，并降低 distillation 占比，验证“完整 GT 监督 + 低比例混合”是否能突破 dense 多实例欠生成。
+
+#### 5.38.1 reference distillation 数据
+
+新增 reference-mode proposal distillation 产物：
+
+```text
+.codex_reports/florence_vp_ovd_count_hint_trainonly_dense16_lr1e6_20260607/distillation/grid_oracle120_improvement_reference.jsonl
+.codex_reports/florence_vp_ovd_count_hint_trainonly_dense16_lr1e6_20260607/distillation/grid_oracle120_improvement_reference_summary.json
+```
+
+构造结果：
+
+| item | value |
+| --- | ---: |
+| output rows | `9` |
+| target mode | `reference` |
+| quality filter | `improvement` |
+| teacher replay TP/FP/FN | `83/48/45` |
+| added boxes | `51` |
+
+与 5.37 的 `teacher` target-mode 不同，这份数据不再把 teacher partial output 当训练目标，而是用同一批 hard positives 监督完整 reference target。
+
+#### 5.38.2 低比例 mix 与 16-step 训练
+
+实验目录：
+
+```text
+.codex_reports/florence_vp_distill_grid_oracle120_reference_r1_b2_16step_20260619
+```
+
+mix 设置：
+
+| item | value |
+| --- | ---: |
+| base input rows | `16` |
+| base output rows | `32` |
+| distillation input rows | `9` |
+| distillation output rows | `9` |
+| output rows | `41` |
+| distillation ratio | `0.2195` |
+| target mode | `reference` |
+| base repeat / distill repeat | `2 / 1` |
+| repeat order | `round_robin` |
+| placement | `interleave` |
+
+训练结果：
+
+| item | value |
+| --- | ---: |
+| steps executed | `16` |
+| final loss | `7.2023` |
+| trainable param delta norm | `0.1477` |
+| trainable parameter ratio | `0.005553` |
+| train sec / total sec | `487.157 / 506.356` |
+
+runner 完整通过：
+
+```text
+build_distillation_mix -> train_adapter -> infer_adapter -> audit -> quality_adapter -> target_count_gap_adapter -> policy_sweep_adapter -> report_card_adapter
+```
+
+空间处理：
+
+```text
+cleanup requested=true, deleted=true
+```
+
+本轮检查实验目录内没有残留 `.safetensors/.pt/.pth/.bin` 中间权重，只保留 JSON、Markdown 和可视化审计产物。
+
+#### 5.38.3 dense16 质量与同口径比较
+
+adapter quality：
+
+```text
+.codex_reports/florence_vp_distill_grid_oracle120_reference_r1_b2_16step_20260619/quality/adapter/vp_detection_quality.json
+```
+
+report-card：
+
+```text
+.codex_reports/florence_vp_distill_grid_oracle120_reference_r1_b2_16step_20260619/report_card/adapter/vp_report_card.json
+```
+
+dense16 结果：
+
+| samples | precision | recall | F1 | TP/FP/FN | avg pred / GT | undergen | overgen |
+| ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: |
+| `16` | `0.7778` | `0.3828` | `0.5131` | `49/14/79` | `3.9375 / 8.0000` | `0.7500` | `0.0000` |
+
+report-card 仍为：
+
+```text
+status=fail, readiness=needs_work
+```
+
+主要失败项没有改变：
+
+- recall `0.3828 < 0.7000`
+- F1 `0.5131 < 0.7500`
+- undergeneration `0.7500 > 0.3500`
+- raw VP wrapper internalization `0.0`
+- structured decoder dependency `1.0`
+
+target-count gap：
+
+| item | value |
+| --- | ---: |
+| current F1 | `0.5131` |
+| oracle count-fill F1 | `0.8906` |
+| oracle F1 delta | `+0.3775` |
+| recoverable FN | `65 / 79` |
+| recall gap closure | `0.8228` |
+| records with deficit | `12 / 16` |
+
+同口径 prefix comparison 产物：
+
+```text
+.codex_reports/florence_vp_distill_grid_oracle120_reference_r1_b2_16step_20260619/prefix_comparison_dense16/vp_quality_prefix_comparison.json
+.codex_reports/florence_vp_distill_grid_oracle120_reference_r1_b2_16step_20260619/record_comparison_vs_old_adapter/vp_record_comparison.json
+```
+
+dense16 对比：
+
+| report | precision | recall | F1 | TP/FP/FN | avg pred | delta F1 vs old adapter |
+| --- | ---: | ---: | ---: | --- | ---: | ---: |
+| old adapter | `0.7576` | `0.3906` | `0.5155` | `50/16/78` | `4.1250` | `0.0000` |
+| old baseline | `0.7463` | `0.3906` | `0.5128` | `50/17/78` | `4.1875` | `-0.0026` |
+| teacher 12-step | `0.7778` | `0.3828` | `0.5131` | `49/14/79` | `3.9375` | `-0.0024` |
+| reference 16-step | `0.7778` | `0.3828` | `0.5131` | `49/14/79` | `3.9375` | `-0.0024` |
+
+逐记录对比 reference 16-step vs old adapter：
+
+| item | value |
+| --- | ---: |
+| matched / compared records | `16 / 16` |
+| unchanged records | `14` |
+| precision-improved records | `1` |
+| recall-regressed records | `1` |
+| delta TP / FP / FN | `-1 / -2 / +1` |
+| delta avg pred boxes | `-0.1875` |
+| FP decreased records | `2` |
+| TP regressed records | `1` |
+| undergeneration fixed records | `0` |
+
+解释：
+
+1. `reference` target-mode + 低比例 mix 没有超过旧 adapter；它和 5.37 的 `teacher` 12-step 在 dense16 上得到完全相同的 P/R/F1。
+2. 这条路线仍主要表现为更保守的输出：少 2 个 FP，但也少 1 个 TP，整体 F1 略低于旧 adapter。
+3. 欠生成没有修复，`undergeneration_fixed_records=0`，说明问题不只是 teacher partial target，也不只是 distillation ratio 过高。
+4. 参数确实发生变化，delta norm 从 12-step 的 `0.1045` 增加到 `0.1477`，但输出分布仍锁在 Florence native OVD 的短输出先验附近。
+
+更新后的下一步建议：
+
+1. 暂停继续拉长同构 distillation step；当前证据显示 `teacher -> reference` 和 `0.5294 -> 0.2195` 都没有带来召回突破。
+2. 优先实现 count-conditioned / target-count-aware 训练：把 `query_box_count` 或显式 count hint 纳入 dense hard-positive 样本，让模型学习“必须补足到 N 个候选”。
+3. 把 proposal route 从“训练完整 reference 字符串”推进到“训练补框动作”：增加 continuation-style 或 proposal-selection-style supervision，直接监督缺失 slots，而不是期待普通 SFT 自动学会补齐。
+4. 继续保留 structured decoder 作为可用 fallback，但 raw VP wrapper internalization 仍需单独训练和单独汇报，不能把 structured decoder 的格式修复当成模型已经内化 VP。
+
+### 5.39 count-aware distillation 工具与 8-step 真实复验
+
+本轮继续执行 5.38 的下一步建议：不再只是切换 `teacher/reference` target，而是把 target-count gap 直接转成训练样本，让 hard rows 在 `text_input` 中显式携带目标数量和缺口信息。
+
+#### 5.39.1 新增实现
+
+新增工具：
+
+```text
+scripts/data-conversion/build_vp_count_aware_distillation.py
+tests/test_vp_count_aware_distillation.py
+```
+
+功能：
+
+1. 输入上一轮 `vp_inference_visualization_summary.json`。
+2. 内部按同一套 structured VP quality config 评估每条记录。
+3. 只筛选指定 bucket 中的 undergenerated hard rows，默认 `dense`。
+4. 输出可直接用于 `OPEN_VOCABULARY_DETECTION` LoRA SFT 的 JSONL。
+5. 在每行写入兼容 distillation mix 的字段：`distillation_target_mode=reference`、`distillation_delta_tp`、`distillation_added_box_count` 等。
+6. 默认把 prompt 改写为：
+
+```text
+{label} | target_count={query_box_count} | predicted={pred_box_count} | missing={missing_box_count}
+```
+
+同时扩展 experiment runner：
+
+```text
+scripts/experiments/run_florence_vp_training_experiment.py
+```
+
+新增参数：
+
+```text
+--run-count-aware-distillation
+--count-aware-distillation-summary
+--count-aware-text-input-template
+--count-aware-focus-bucket
+--count-aware-min-missing-boxes
+--count-aware-min-false-negatives
+--count-aware-max-rows
+```
+
+当同时使用 `--run-count-aware-distillation` 与 `--run-distillation-mix` 时，runner 会先生成 count-aware hard rows，再自动把它作为 `distillation-input` 混入训练集。
+
+#### 5.39.2 真实 count-aware hard rows
+
+基于旧 adapter dense16 inference summary 生成 count-aware distillation：
+
+```text
+.codex_reports/florence_vp_count_aware_dense16_20260619/query_ovd_count_aware_distill.jsonl
+.codex_reports/florence_vp_count_aware_dense16_20260619/query_ovd_count_aware_distill_summary.json
+```
+
+生成结果：
+
+| item | value |
+| --- | ---: |
+| input records | `16` |
+| output rows | `12` |
+| total missing boxes | `65` |
+| recoverable FN estimate | `65` |
+| avg missing boxes / row | `5.4167` |
+| bucket counts | `dense=12` |
+
+这与前面 target-count gap 的 `65 / 79` recoverable FN 对齐，说明新工具确实把最主要的 count/proposal 缺口转成了训练数据。
+
+#### 5.39.3 8-step 真实训练
+
+实验目录：
+
+```text
+.codex_reports/florence_vp_count_aware_dense16_8step_20260619
+```
+
+runner 阶段：
+
+```text
+build_count_aware_distillation -> build_distillation_mix -> train_adapter -> infer_adapter -> audit -> quality_adapter -> target_count_gap_adapter -> policy_sweep_adapter -> report_card_adapter
+```
+
+mix 设置：
+
+| item | value |
+| --- | ---: |
+| base output rows | `32` |
+| count-aware distillation rows | `12` |
+| output rows | `44` |
+| distillation ratio | `0.2727` |
+| repeat order | `round_robin` |
+| placement | `interleave` |
+| bucket counts | `single=18, medium=12, dense=14` |
+
+训练结果：
+
+| item | value |
+| --- | ---: |
+| steps executed | `8` |
+| final loss | `6.9225` |
+| trainable param delta norm | `0.1077` |
+| trainable parameter ratio | `0.2571` |
+| train sec / total sec | `122.583 / 139.658` |
+
+空间处理：
+
+```text
+cleanup requested=true, deleted=true
+```
+
+本轮检查实验目录内没有残留 `.safetensors/.pt/.pth/.bin` 中间权重。
+
+#### 5.39.4 dense16 结果
+
+adapter quality：
+
+```text
+.codex_reports/florence_vp_count_aware_dense16_8step_20260619/quality/adapter/vp_detection_quality.json
+```
+
+结果：
+
+| samples | precision | recall | F1 | TP/FP/FN | avg pred / GT | undergen | overgen |
+| ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: |
+| `16` | `0.7778` | `0.3828` | `0.5131` | `49/14/79` | `3.9375 / 8.0000` | `0.7500` | `0.0000` |
+
+target-count gap 仍未变化：
+
+| item | value |
+| --- | ---: |
+| current F1 | `0.5131` |
+| oracle count-fill F1 | `0.8906` |
+| recoverable FN | `65 / 79` |
+| records with deficit | `12 / 16` |
+| recall gap closure | `0.8228` |
+
+同口径 prefix comparison：
+
+```text
+.codex_reports/florence_vp_count_aware_dense16_8step_20260619/prefix_comparison_dense16/vp_quality_prefix_comparison.json
+.codex_reports/florence_vp_count_aware_dense16_8step_20260619/record_comparison_vs_old_adapter/vp_record_comparison.json
+```
+
+| report | precision | recall | F1 | TP/FP/FN | avg pred | delta F1 vs old adapter |
+| --- | ---: | ---: | ---: | --- | ---: | ---: |
+| old adapter | `0.7576` | `0.3906` | `0.5155` | `50/16/78` | `4.1250` | `0.0000` |
+| teacher 12-step | `0.7778` | `0.3828` | `0.5131` | `49/14/79` | `3.9375` | `-0.0024` |
+| reference 16-step | `0.7778` | `0.3828` | `0.5131` | `49/14/79` | `3.9375` | `-0.0024` |
+| count-aware 8-step | `0.7778` | `0.3828` | `0.5131` | `49/14/79` | `3.9375` | `-0.0024` |
+
+逐记录结果：
+
+| item | value |
+| --- | ---: |
+| unchanged records | `14` |
+| precision-improved records | `1` |
+| recall-regressed records | `1` |
+| delta TP / FP / FN | `-1 / -2 / +1` |
+| undergeneration fixed records | `0` |
+
+解释：
+
+1. count-aware 文本提示和 hard-row 筛选链路已经实现并可真实训练，但 8-step SFT 仍没有改变 Florence native OVD 的短输出先验。
+2. 结果与 `teacher 12-step`、`reference 16-step` 完全同分，说明单纯把 `target_count/missing` 写进输入文本还不足以让模型学习补齐 dense instances。
+3. 当前瓶颈更像是 decoding/action 形态问题：模型知道 query label，但没有被训练成“在已有输出之后继续补缺失 slots”。
+
+更新后的下一步建议：
+
+1. 保留 count-aware 工具，作为 hard-row mining 和训练集构造基础。
+2. 下一轮不要只增加 step；优先新增 continuation-style target：输入包含原始 partial prediction，suffix 只监督 missing boxes 或补框片段。
+3. 训练评估应区分两类能力：完整生成完整 reference、以及给定 partial prediction 后补足 target count。后者更贴近当前 recoverable FN 瓶颈。
+4. 若继续使用普通 full-reference SFT，则应同时做更长 step / 更高 LoRA 有效学习率 / 更高 hard-row repeat 的消融，但不能把它作为唯一主线。
+
 ---
 
 ## 6. 可直接追加到报告末尾的“待讨论问题”
