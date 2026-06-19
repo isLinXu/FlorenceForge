@@ -4,7 +4,9 @@
 # Requires simultaneous loading of student + teachers — high VRAM pressure.
 # Use batch_size=1 and gradient accumulation for 24G GPUs.
 
+output_dir: "outputs/tvp/opd"
 student_model: "outputs/tvp/sft/final"
+allow_missing_teachers: true
 teacher_models:
   - "outputs/tvp/expert_grounding/final"   # ETwG: expert for grounding/counting
   - "outputs/tvp/expert_navigation/final" # ETwP: expert for maze/path

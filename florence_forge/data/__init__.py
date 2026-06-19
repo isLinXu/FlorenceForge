@@ -15,6 +15,8 @@ from .dataset import MultiTaskDataset, TaskSample
 from .validator import DataValidator, validate_data_format
 from .utils import generate_mask_from_polygon
 from .vp_converter import VisualPrimitiveConverter
+from .agentic_trajectory_expander import AgenticTrajectoryExpander, AgenticChainBuilder
+from .agentic_synthetic import write_all_agentic_synthetic
 
 __all__ = [
     "MultiTaskDataset",
@@ -29,4 +31,7 @@ __all__ = [
     "validate_data_format",
     "generate_mask_from_polygon",
     "VisualPrimitiveConverter",
+    "AgenticTrajectoryExpander",
+    "AgenticChainBuilder",
+    "write_all_agentic_synthetic",
 ]
