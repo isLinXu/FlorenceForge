@@ -262,6 +262,7 @@ class TestBaseVLMBackend:
 
         backend = MockBackend(mock_config)
         backend.BACKEND_NAME = "florence-2"
+        backend.GENERATE_DEFAULTS = {"use_cache": False}
         backend._model = RecordingModel()
 
         backend.generate(
