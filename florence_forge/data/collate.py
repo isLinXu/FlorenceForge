@@ -54,6 +54,7 @@ class Florence2Collator:
             "attention_mask",
             "pixel_values",
             "labels",
+            "loss_weights",
             "token_type_ids",
             "position_ids",
             "mm_token_type_ids",
@@ -90,25 +91,55 @@ class Florence2Collator:
             if "input_ids" in collated:
                 collated["labels"] = collated["input_ids"].clone()
 
-        # ---- 4. 处理可选序列张量（PaliGemma 等 decoder-only VLM 可能返回） ----
+        # ---- 4. Handle loss_weights (phase-aware loss, pad_value=0) ----
+        # If ANY sample has loss_weights, fill missing ones with uniform 1.0
+        # so mixed agentic+native batches don't lose the signal.
+        any_has_weights = any(sample.get("loss_weights") is not None for sample in batch)
+        if any_has_weights:
+            import torch as _torch
+            weights_list = []
+            for sample in batch:
+                lw = sample.get("loss_weights")
+                if lw is not None:
+                    weights_list.append(lw)
+                else:
+                    # Fill with uniform weight for supervised tokens, 0 for padding
+                    labels = sample.get("labels")
+                    if labels is not None and hasattr(labels, "shape"):
+                        seq_len = labels.shape[-1] if labels.dim() > 0 else len(labels)
+                        # Set weight=1.0 for supervised tokens, 0.0 for ignored
+                        ignore_idx = -100
+                        lw_tensor = _torch.where(
+                            labels != ignore_idx,
+                            _torch.ones(seq_len, dtype=_torch.float32),
+                            _torch.zeros(seq_len, dtype=_torch.float32),
+                        )
+                    else:
+                        ids = sample.get("input_ids", [])
+                        seq_len = len(ids) if hasattr(ids, "__len__") else 1
+                        lw_tensor = _torch.ones(seq_len, dtype=_torch.float32)
+                    weights_list.append(lw_tensor)
+            collated["loss_weights"] = self._pad_sequence(weights_list, pad_value=0)
+
+        # ---- 5. Handle optional sequence tensors (PaliGemma etc.) ----
         for key in ("token_type_ids", "position_ids", "mm_token_type_ids"):
             if all(sample.get(key) is not None for sample in batch):
                 tensor_list = [sample[key] for sample in batch]
                 collated[key] = self._pad_sequence(tensor_list, pad_value=0)
 
-        # ---- 5. 处理 pixel_values（直接 stack） ----
+        # ---- 6. pixel_values (direct stack) ----
         if all(sample.get("pixel_values") is not None for sample in batch):
             pixel_values_list = [sample["pixel_values"] for sample in batch]
             # Dataset __getitem__ 已确保 pixel_values 是张量，直接 stack
             collated["pixel_values"] = torch.stack(pixel_values_list, dim=0)
 
-        # ---- 6. 收集非张量字段为列表 ----
+        # ---- 7. Collect non-tensor fields as lists ----
         for key in non_tensor_keys:
             values = [sample.get(key) for sample in batch]
             if any(v is not None for v in values):
                 collated[key] = values
 
-        # ---- 7. 任务类型快捷访问 ----
+        # ---- 8. Task type shortcut ----
         if "task_type" in collated:
             task_types = collated["task_type"]
             collated["task_types"] = task_types
