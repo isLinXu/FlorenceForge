@@ -5,8 +5,13 @@ from typing import List, Dict
 from collections import Counter
 import math
 
-class CaptionMetrics:
-    """图像描述评估指标"""
+class AdvancedCaptionMetrics:
+    """高级图像描述评估指标（BLEU/ROUGE/CIDEr 等）
+
+    注意：此类与 evaluation.metrics.CaptionMetrics（基础指标计算器）不同。
+    本类提供更丰富的 NLP 指标计算，而 metrics.CaptionMetrics 继承自
+    MetricCalculator 基类，用于训练评估管线。
+    """
     
     def __init__(self):
         pass

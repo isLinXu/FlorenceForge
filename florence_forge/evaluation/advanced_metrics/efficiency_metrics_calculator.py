@@ -654,7 +654,7 @@ class EfficiencyMetricsCalculator(MetricCalculator):
     def benchmark_throughput(
         self,
         test_data: List[Any],
-        batch_sizes: List[int] = [1, 4, 8, 16, 32],
+        batch_sizes: Optional[List[int]] = None,
         num_iterations: int = 10
     ) -> Dict[str, Any]:
         """基准吞吐量测试
@@ -669,6 +669,9 @@ class EfficiencyMetricsCalculator(MetricCalculator):
         """
         if self.model is None:
             return {'error': '未设置模型'}
+
+        if batch_sizes is None:
+            batch_sizes = [1, 4, 8, 16, 32]
 
         results = {
             'batch_size_results': {},

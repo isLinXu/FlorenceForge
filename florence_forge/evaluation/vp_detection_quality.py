@@ -7,43 +7,49 @@ from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
 
 from .structured_vp_decoder import labels_match
+from .vp_parsing import (
+    allowed_label_field_candidates,
+    bad_case_reasons,
+    box_count_bucket,
+    is_box,
+    normalize_label,
+    parse_prediction,
+    quality_record_key,
+    record_field_value,
+    record_query_box_count,
+    record_text,
+    resolve_record_allowed_labels,
+    resolve_record_positive_int_field,
+    summary_records,
+)
+from .vp_aggregation import (
+    aggregate_counts,
+    compare_quality_record,
+    int_record_metric,
+    mean,
+    quality_report_brief,
+    ratio,
+    safe_policy_label,
+    summarize_box_count_buckets,
+    summarize_bucket_records,
+    summarize_quality_record_comparison,
+    summarize_quality_record_comparison_buckets,
+    summarize_target_count_gap_buckets,
+    summarize_target_count_gap_rows,
+    target_count_gap_row,
+    top_record_deltas,
+)
 from ._vp_helpers import (
-    _aggregate_counts,
-    _allowed_label_field_candidates,
     _allowed_labels_from_config,
-    _bad_case_reasons,
-    _box_count_bucket,
     _coerce_named_reports,
-    _compare_quality_record,
     _focus_bucket_metrics,
     _infer_policy_kind,
-    _int_record_metric,
-    _is_box,
-    _mean,
     _metric_gap,
     _normalize_focus_bucket,
-    _parse_prediction,
     _policy_constraints_and_caveats,
     _policy_rank_key,
-    _quality_report_brief,
     _quality_report_to_comparison_row,
-    _quality_record_key,
-    _ratio,
-    _record_field_value,
-    _record_query_box_count,
-    _record_text,
-    _resolve_record_allowed_labels,
-    _resolve_record_positive_int_field,
     _row_metric,
-    _safe_policy_label,
-    _summarize_box_count_buckets,
-    _summarize_bucket_records,
-    _summarize_quality_record_comparison,
-    _summarize_quality_record_comparison_buckets,
-    _summarize_target_count_gap_buckets,
-    _summarize_target_count_gap_rows,
-    _target_count_gap_row,
-    _top_record_deltas,
     load_vp_quality_summary,
 )
 
@@ -101,7 +107,7 @@ def evaluate_vp_detection_quality(
         meta = metadata[index] if index < len(metadata) else {}
         task_prompt = meta.get("prefix") or meta.get("task_prompt")
         parsed_reference = parser.parse_detections(reference)
-        effective_allowed_labels = _resolve_record_allowed_labels(
+        effective_allowed_labels = resolve_record_allowed_labels(
             config=config,
             record=meta,
             reference_detections=parsed_reference,
@@ -112,7 +118,7 @@ def evaluate_vp_detection_quality(
             raw_detection_count,
             filtered_detection_count,
             repaired_tail_detection_count,
-        ) = _parse_prediction(
+        ) = parse_prediction(
             prediction,
             parser=parser,
             decoder=decoder,
@@ -134,14 +140,14 @@ def evaluate_vp_detection_quality(
             "prediction_source": source,
             "pred_box_count": len(parsed_prediction),
             "gt_box_count": len(parsed_reference),
-            "query_box_count": _record_query_box_count(meta, len(parsed_reference)),
+            "query_box_count": record_query_box_count(meta, len(parsed_reference)),
             "raw_detection_count": raw_detection_count,
             "filtered_detection_count": filtered_detection_count,
             "repaired_tail_detection_count": repaired_tail_detection_count,
             "allowed_labels": effective_allowed_labels,
             **match_result,
         }
-        record["box_count_bucket"] = _box_count_bucket(record["query_box_count"])
+        record["box_count_bucket"] = box_count_bucket(record["query_box_count"])
         record["box_count_exact_match"] = record["pred_box_count"] == record["gt_box_count"]
         record["overgenerated"] = record["pred_box_count"] > record["gt_box_count"]
         record["undergenerated"] = record["pred_box_count"] < record["gt_box_count"]
@@ -154,7 +160,7 @@ def evaluate_vp_detection_quality(
             and record["false_positives"] == 0
             and record["false_negatives"] == 0
         )
-        record["bad_case_reasons"] = _bad_case_reasons(record)
+        record["bad_case_reasons"] = bad_case_reasons(record)
         records.append(record)
 
     return summarize_vp_quality_records(
@@ -172,11 +178,11 @@ def evaluate_vp_summary(
     """Evaluate a saved ``vp_inference_visualization_summary.json`` object."""
 
     config = config or VPDetectionQualityConfig()
-    from ._vp_helpers import _summary_records
+    from .vp_parsing import summary_records as _summary_records
 
     records = _summary_records(summary)
-    predictions = [_record_text(record, config.prediction_field) for record in records]
-    references = [_record_text(record, config.reference_field) for record in records]
+    predictions = [record_text(record, config.prediction_field) for record in records]
+    references = [record_text(record, config.reference_field) for record in records]
     result = evaluate_vp_detection_quality(
         predictions,
         references,
@@ -238,7 +244,7 @@ def match_vp_detections(
         "false_positives": false_positives,
         "false_negatives": false_negatives,
         "matched_ious": [match["iou"] for match in matches],
-        "mean_matched_iou": _mean(match["iou"] for match in matches),
+        "mean_matched_iou": mean(match["iou"] for match in matches),
         "matches": matches,
     }
 
@@ -308,11 +314,11 @@ def summarize_vp_quality_records(
         "true_positives": total_tp,
         "false_positives": total_fp,
         "false_negatives": total_fn,
-        "avg_pred_boxes": _mean(float(record.get("pred_box_count", 0) or 0) for record in records),
-        "avg_gt_boxes": _mean(float(record.get("gt_box_count", 0) or 0) for record in records),
-        "box_count_exact_match_ratio": _ratio(records, "box_count_exact_match"),
-        "box_count_overgeneration_ratio": _ratio(records, "overgenerated"),
-        "box_count_undergeneration_ratio": _ratio(records, "undergenerated"),
+        "avg_pred_boxes": mean(float(record.get("pred_box_count", 0) or 0) for record in records),
+        "avg_gt_boxes": mean(float(record.get("gt_box_count", 0) or 0) for record in records),
+        "box_count_exact_match_ratio": ratio(records, "box_count_exact_match"),
+        "box_count_overgeneration_ratio": ratio(records, "overgenerated"),
+        "box_count_undergeneration_ratio": ratio(records, "undergenerated"),
         "repaired_tail_detection_count": sum(
             int(record.get("repaired_tail_detection_count", 0) or 0)
             for record in records
@@ -324,19 +330,19 @@ def summarize_vp_quality_records(
             ) / len(records)
             if records else 0.0
         ),
-        "avg_repaired_tail_detection_count": _mean(
+        "avg_repaired_tail_detection_count": mean(
             float(record.get("repaired_tail_detection_count", 0) or 0)
             for record in records
         ),
-        "mean_matched_iou": _mean(
+        "mean_matched_iou": mean(
             iou
             for record in records
             for iou in record.get("matched_ious", [])
         ),
         "single_target_samples": len(single_target_records),
-        "single_target_hit_ratio": _ratio(single_target_records, "single_target_hit"),
-        "single_target_exact_hit_ratio": _ratio(single_target_records, "single_target_exact_hit"),
-        "box_count_bucket_summary": _summarize_box_count_buckets(records),
+        "single_target_hit_ratio": ratio(single_target_records, "single_target_hit"),
+        "single_target_exact_hit_ratio": ratio(single_target_records, "single_target_exact_hit"),
+        "box_count_bucket_summary": summarize_box_count_buckets(records),
         "prediction_source_counts": dict(source_counts),
         "prediction_source_ratios": {
             source: count / source_total
@@ -351,7 +357,7 @@ def summarize_vp_quality_records(
 def compute_bbox_iou(box1: Any, box2: Any) -> float:
     """Compute IoU for two ``[x1, y1, x2, y2]`` boxes."""
 
-    if not _is_box(box1) or not _is_box(box2):
+    if not is_box(box1) or not is_box(box2):
         return 0.0
     x1_1, y1_1, x2_1, y2_1 = [float(value) for value in box1]
     x1_2, y1_2, x2_2, y2_2 = [float(value) for value in box2]
@@ -480,10 +486,10 @@ def compare_vp_quality_record_reports(
     """Compare two VP quality reports at the per-record level."""
 
     focus_bucket = _normalize_focus_bucket(focus_bucket)
-    from ._vp_helpers import _index_quality_records
+    from .vp_parsing import index_quality_records
 
-    candidate_records = _index_quality_records(candidate_report.get("records", []))
-    baseline_records = _index_quality_records(baseline_report.get("records", []))
+    candidate_records = index_quality_records(candidate_report.get("records", []))
+    baseline_records = index_quality_records(baseline_report.get("records", []))
     common_keys = [
         key for key in baseline_records
         if key in candidate_records
@@ -496,16 +502,16 @@ def compare_vp_quality_record_reports(
         bucket = str(
             candidate.get("box_count_bucket")
             or baseline.get("box_count_bucket")
-            or _box_count_bucket(candidate.get("gt_box_count", baseline.get("gt_box_count")))
+            or box_count_bucket(candidate.get("gt_box_count", baseline.get("gt_box_count")))
         )
         if focus_bucket and bucket != focus_bucket:
             continue
-        rows.append(_compare_quality_record(key, candidate, baseline, bucket=bucket))
+        rows.append(compare_quality_record(key, candidate, baseline, bucket=bucket))
 
-    row_summary = _summarize_quality_record_comparison(rows)
+    row_summary = summarize_quality_record_comparison(rows)
     result = {
-        "candidate_name": _safe_policy_label(candidate_name),
-        "baseline_name": _safe_policy_label(baseline_name),
+        "candidate_name": safe_policy_label(candidate_name),
+        "baseline_name": safe_policy_label(baseline_name),
         "focus_bucket": focus_bucket,
         "candidate_report_path": candidate_report.get("source_report_path"),
         "baseline_report_path": baseline_report.get("source_report_path"),
@@ -521,13 +527,14 @@ def compare_vp_quality_record_reports(
             key for key in candidate_records
             if key not in baseline_records
         ],
-        "candidate_summary": _quality_report_brief(candidate_report),
-        "baseline_summary": _quality_report_brief(baseline_report),
+        "candidate_summary": quality_report_brief(candidate_report),
+        "baseline_summary": quality_report_brief(baseline_report),
         **row_summary,
         "rows": rows,
     }
-    result["top_improvements"] = _top_record_deltas(rows, reverse=True)
-    result["top_regressions"] = _top_record_deltas(rows, reverse=False)
+    result["top_improvements"] = top_record_deltas(rows, reverse=True)
+    result["top_regressions"] = top_record_deltas(rows, reverse=False)
+    result["bucket_summary"] = summarize_quality_record_comparison_buckets(rows)
     return result
 
 
@@ -777,10 +784,10 @@ def analyze_vp_target_count_gap(
     if focus_bucket:
         records = [
             record for record in records
-            if str(record.get("box_count_bucket", _box_count_bucket(record.get("gt_box_count")))) == focus_bucket
+            if str(record.get("box_count_bucket", box_count_bucket(record.get("gt_box_count")))) == focus_bucket
         ]
 
-    rows = [_target_count_gap_row(record) for record in records]
+    rows = [target_count_gap_row(record) for record in records]
     current_tp = sum(int(row.get("true_positives", 0) or 0) for row in rows)
     current_fp = sum(int(row.get("false_positives", 0) or 0) for row in rows)
     current_fn = sum(int(row.get("false_negatives", 0) or 0) for row in rows)
@@ -788,9 +795,9 @@ def analyze_vp_target_count_gap(
     oracle_tp = current_tp + recoverable_tp
     oracle_fp = current_fp
     oracle_fn = current_fn - recoverable_tp
-    current_metrics = _aggregate_counts(current_tp, current_fp, current_fn)
-    oracle_metrics = _aggregate_counts(oracle_tp, oracle_fp, oracle_fn)
-    bucket_summary = _summarize_target_count_gap_buckets(rows)
+    current_metrics = aggregate_counts(current_tp, current_fp, current_fn)
+    oracle_metrics = aggregate_counts(oracle_tp, oracle_fp, oracle_fn)
+    bucket_summary = summarize_target_count_gap_buckets(rows)
     ranked_rows = sorted(
         rows,
         key=lambda row: (
@@ -810,8 +817,8 @@ def analyze_vp_target_count_gap(
             "true_positives": current_tp,
             "false_positives": current_fp,
             "false_negatives": current_fn,
-            "avg_pred_boxes": _mean(float(row.get("pred_box_count", 0) or 0) for row in rows),
-            "avg_target_boxes": _mean(float(row.get("target_box_count", 0) or 0) for row in rows),
+            "avg_pred_boxes": mean(float(row.get("pred_box_count", 0) or 0) for row in rows),
+            "avg_target_boxes": mean(float(row.get("target_box_count", 0) or 0) for row in rows),
         },
         "oracle_count_fill": {
             **oracle_metrics,

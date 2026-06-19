@@ -23,6 +23,25 @@ __all__ = [
     "resolve_structured_vp_filter_caps",
     "filter_native_detections",
     "VisualPrimitiveDetectionMetrics",
+    "TVPCompositeMetric",
+    # VP quality (unified from vp_detection_quality + vp_report_card)
+    "VPDetectionQualityConfig",
+    "VPReportCardThresholds",
+    "analyze_vp_target_count_gap",
+    "build_vp_report_card",
+    "compare_vp_quality_record_reports",
+    "compare_vp_quality_reports",
+    "compute_bbox_iou",
+    "evaluate_vp_detection_quality",
+    "evaluate_vp_summary",
+    "match_vp_detections",
+    "recommend_vp_policy",
+    "render_vp_detection_quality_markdown",
+    "render_vp_policy_comparison_markdown",
+    "render_vp_record_comparison_markdown",
+    "render_vp_report_card_markdown",
+    "render_vp_target_count_gap_markdown",
+    "summarize_vp_quality_records",
 ]
 
 _LAZY_EXPORTS = {
@@ -46,6 +65,25 @@ _LAZY_EXPORTS = {
     "resolve_structured_vp_filter_caps": ("florence_forge.evaluation.structured_vp_decoder", "resolve_structured_vp_filter_caps"),
     "filter_native_detections": ("florence_forge.evaluation.structured_vp_decoder", "filter_native_detections"),
     "VisualPrimitiveDetectionMetrics": ("florence_forge.evaluation.metrics", "VisualPrimitiveDetectionMetrics"),
+    "TVPCompositeMetric": ("florence_forge.evaluation.tvp_metrics", "TVPCompositeMetric"),
+    # VP quality (unified)
+    "VPDetectionQualityConfig": ("florence_forge.evaluation.vp_quality", "VPDetectionQualityConfig"),
+    "VPReportCardThresholds": ("florence_forge.evaluation.vp_quality", "VPReportCardThresholds"),
+    "analyze_vp_target_count_gap": ("florence_forge.evaluation.vp_quality", "analyze_vp_target_count_gap"),
+    "build_vp_report_card": ("florence_forge.evaluation.vp_quality", "build_vp_report_card"),
+    "compare_vp_quality_record_reports": ("florence_forge.evaluation.vp_quality", "compare_vp_quality_record_reports"),
+    "compare_vp_quality_reports": ("florence_forge.evaluation.vp_quality", "compare_vp_quality_reports"),
+    "compute_bbox_iou": ("florence_forge.evaluation.vp_quality", "compute_bbox_iou"),
+    "evaluate_vp_detection_quality": ("florence_forge.evaluation.vp_quality", "evaluate_vp_detection_quality"),
+    "evaluate_vp_summary": ("florence_forge.evaluation.vp_quality", "evaluate_vp_summary"),
+    "match_vp_detections": ("florence_forge.evaluation.vp_quality", "match_vp_detections"),
+    "recommend_vp_policy": ("florence_forge.evaluation.vp_quality", "recommend_vp_policy"),
+    "render_vp_detection_quality_markdown": ("florence_forge.evaluation.vp_quality", "render_vp_detection_quality_markdown"),
+    "render_vp_policy_comparison_markdown": ("florence_forge.evaluation.vp_quality", "render_vp_policy_comparison_markdown"),
+    "render_vp_record_comparison_markdown": ("florence_forge.evaluation.vp_quality", "render_vp_record_comparison_markdown"),
+    "render_vp_report_card_markdown": ("florence_forge.evaluation.vp_quality", "render_vp_report_card_markdown"),
+    "render_vp_target_count_gap_markdown": ("florence_forge.evaluation.vp_quality", "render_vp_target_count_gap_markdown"),
+    "summarize_vp_quality_records": ("florence_forge.evaluation.vp_quality", "summarize_vp_quality_records"),
 }
 
 

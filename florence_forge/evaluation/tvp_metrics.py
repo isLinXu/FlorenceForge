@@ -255,17 +255,33 @@ class ChainOfThoughtMetric:
     """
 
     EXPECTED_STEPS = {
-        "counting": ["Analyzing the request", "Object grounding", "Conclusion"],
-        "maze": ["Observation", "Exploration", "Solution", "Answer"],
-        "path": ["Observation", "Trajectory", "Endpoint", "Answer"],
-        "spatial": ["Observation", "Reasoning", "Answer"],
+        "counting": ["Deconstructing the query", "Sweeping the scene", "Tallying"],
+        "counting_fine": ["What am I looking for", "Evaluating each", "Tally"],
+        "maze": ["Exploration", "Answer"],
+        "path": ["starting point", "visual path", "Answer"],
+        "spatial": ["Analyzing the request", "Reasoning", "Conclusion"],
     }
+
+    @staticmethod
+    def _normalize_task_type(task_type: str) -> str:
+        normalized = str(task_type or "counting").strip().lower().replace("-", "_")
+        aliases = {
+            "count_vp_cot": "counting",
+            "count_vp": "counting",
+            "od_vp": "counting",
+            "phrase_grounding_vp": "counting",
+            "spatial_vp": "spatial",
+            "maze_vp": "maze",
+            "path_vp": "path",
+        }
+        return aliases.get(normalized, normalized)
 
     def compute(
         self,
         text: str,
         task_type: str = "counting",
     ) -> Dict[str, float]:
+        task_type = self._normalize_task_type(task_type)
         expected = self.EXPECTED_STEPS.get(task_type, [])
 
         # Step presence
@@ -419,6 +435,20 @@ class TVPCompositeMetric:
         self.cot_metric = ChainOfThoughtMetric()
         self.counting_metric = CountingDetectionMetric()
 
+    @staticmethod
+    def _normalize_task_type(task_type: str) -> str:
+        normalized = str(task_type or "counting").strip().lower().replace("-", "_")
+        aliases = {
+            "count_vp_cot": "counting",
+            "count_vp": "counting",
+            "od_vp": "counting",
+            "phrase_grounding_vp": "counting",
+            "spatial_vp": "spatial",
+            "maze_vp": "maze",
+            "path_vp": "path",
+        }
+        return aliases.get(normalized, normalized)
+
     def compute(
         self,
         pred_text: str,
@@ -436,6 +466,7 @@ class TVPCompositeMetric:
         Returns:
             Dictionary of metric scores.
         """
+        task_type = self._normalize_task_type(task_type)
         results: Dict[str, float] = {}
 
         # CoT structural quality (always applicable)
@@ -462,6 +493,14 @@ class TVPCompositeMetric:
                 end_label_gt=kwargs.get("gt_label", ""),
             )
             results.update(path_scores)
+
+        elif task_type == "spatial":
+            gt_answer = str(kwargs.get("gt_answer", "")).strip().lower()
+            if gt_answer:
+                pred_lower = pred_text.lower()
+                results["answer_accuracy"] = (
+                    1.0 if gt_answer in pred_lower or pred_lower.endswith(gt_answer) else 0.0
+                )
 
         elif task_type in ("counting", "od_vp", "phrase_grounding_vp"):
             count_scores = self.counting_metric.compute(pred_text, **kwargs)

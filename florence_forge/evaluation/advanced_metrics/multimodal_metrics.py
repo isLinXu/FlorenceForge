@@ -249,7 +249,7 @@ class MultiModalMetrics:
         self,
         images: List[Union[str, Image.Image]],
         texts: List[str],
-        k_values: List[int] = [1, 5, 10],
+        k_values: Optional[List[int]] = None,
         method: str = "clip"
     ) -> Dict[str, Any]:
         """计算跨模态检索指标
@@ -263,6 +263,9 @@ class MultiModalMetrics:
         Returns:
             跨模态检索指标结果
         """
+        if k_values is None:
+            k_values = [1, 5, 10]
+
         if not self.clip_available:
             logger.warning("CLIP模型不可用，返回默认值")
             return {f"recall_at_{k}": 0.0 for k in k_values}
