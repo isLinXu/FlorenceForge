@@ -1,0 +1,35 @@
+# TVP SFT smoke config — use with synthetic data from scripts/smoke/tvp_alignment_smoke.py
+# Example:
+#   python scripts/smoke/tvp_alignment_smoke.py --keep-artifacts --with-training
+#   florence_forge_cli train --tvp-config .codex_reports/tvp_alignment_smoke/sft_smoke.yaml --epochs 1
+
+model_name_or_path: "/Users/gatilin/Downloads/Florence2_det_base_ovd-v3-1751283651704-model"
+output_dir: "outputs/tvp/sft_smoke"
+use_lora: true
+experiment_name: "florenceforge_tvp_sft_smoke"
+torch_dtype: "float32"
+
+mixed_training:
+  enabled: false
+
+epochs: 1
+max_steps: 1
+batch_size: 1
+gradient_accumulation_steps: 1
+learning_rate: 2.0e-5
+num_workers: 0
+device: "mps"
+
+datasets:
+  - path: ".codex_reports/tvp_alignment_smoke/vp/maze_vp.jsonl"
+    image_root: "."
+    task_type: "maze"
+    weight: 1.0
+  - path: ".codex_reports/tvp_alignment_smoke/vp/path_vp.jsonl"
+    image_root: "."
+    task_type: "path"
+    weight: 1.0
+  - path: ".codex_reports/tvp_alignment_smoke/vp/spatial_vp.jsonl"
+    image_root: "."
+    task_type: "spatial"
+    weight: 1.0

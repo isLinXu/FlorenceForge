@@ -608,7 +608,7 @@ class MultiTaskEvaluator:
             task_config = FLORENCE2_TASKS[task_type]
 
             # 移除任务 prompt
-            prefix = task_config.get("prompt")
+            prefix = task_config.prompt
             if prefix:
                 if cleaned.startswith(prefix):
                     cleaned = cleaned[len(prefix):].strip()
@@ -633,7 +633,7 @@ class MultiTaskEvaluator:
             task_config = FLORENCE2_TASKS[task_type]
 
             # 移除任务 prompt
-            prefix = task_config.get("prompt")
+            prefix = task_config.prompt
             if prefix:
                 if cleaned.startswith(prefix):
                     cleaned = cleaned[len(prefix):].strip()
@@ -853,3 +853,18 @@ class MultiTaskEvaluator:
                     }
         
         return comparison
+
+    def evaluate_tvp_benchmark(
+        self,
+        data_path: Union[str, Path],
+        *,
+        max_samples: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Evaluate the loaded model on a TVP JSONL benchmark dataset."""
+        from .tvp_benchmark import run_tvp_benchmark
+
+        return run_tvp_benchmark(
+            self.model,
+            data_path,
+            max_samples=max_samples,
+        )
