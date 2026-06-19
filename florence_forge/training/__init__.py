@@ -21,6 +21,10 @@ __all__ = [
     "ActivationRecomputePolicy",
     "AsyncCheckpointSaver",
     "TrainingLoop",
+    "AgenticFormatRewardModel",
+    "AgenticQualityRewardModel",
+    "AgenticSelfCorrectionRewardModel",
+    "build_agentic_reward_models",
 ]
 
 _LAZY_EXPORTS = {
@@ -48,6 +52,10 @@ _LAZY_EXPORTS = {
     ),
     "AsyncCheckpointSaver": ("florence_forge.training.async_checkpoint", "AsyncCheckpointSaver"),
     "TrainingLoop": ("florence_forge.training.training_loop", "TrainingLoop"),
+    "AgenticFormatRewardModel": ("florence_forge.training.reward_models", "AgenticFormatRewardModel"),
+    "AgenticQualityRewardModel": ("florence_forge.training.reward_models", "AgenticQualityRewardModel"),
+    "AgenticSelfCorrectionRewardModel": ("florence_forge.training.reward_models", "AgenticSelfCorrectionRewardModel"),
+    "build_agentic_reward_models": ("florence_forge.training.reward_models", "build_agentic_reward_models"),
 }
 
 

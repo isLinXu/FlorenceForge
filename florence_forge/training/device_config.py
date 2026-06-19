@@ -3,7 +3,7 @@
 提供设备检测、混合精度配置和分布式训练插件构建
 """
 import logging
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 import torch
 
@@ -25,6 +25,7 @@ class DeviceConfigurator:
         self.config = config
         self.device = None
         self.device_type = None
+        self._gpu_info_cache: Optional[List[Dict[str, Any]]] = None
     
     def setup_device(self) -> str:
         """设置设备
@@ -45,6 +46,10 @@ class DeviceConfigurator:
                 self.device = "cpu"
                 self.device_type = "cpu"
                 logger.warning("⚠️  未检测到 GPU，使用 CPU 训练（速度较慢）")
+                logger.warning(
+                    "💡 CPU 训练优化建议：减小 batch_size、关闭混合精度、"
+                    "减少数据加载线程数 (num_workers=0)、禁用 gradient_checkpointing"
+                )
         else:
             self.device = self.config.device
             self.device_type = self.device.split(':')[0] if ':' in self.device else self.device
@@ -138,3 +143,72 @@ class DeviceConfigurator:
         return DeepSpeedPlugin().build_accelerate_plugin(
             dist_config, training_config=self.config
         )
+
+    # ------------------------------------------------------------------
+    # Multi-GPU selection (v3 enhancement)
+    # ------------------------------------------------------------------
+
+    def _select_best_gpu(self) -> int:
+        """Select the GPU with the most free memory.
+
+        Returns:
+            GPU index (0-based relative to CUDA_VISIBLE_DEVICES).
+        """
+        import os
+
+        # If CUDA_VISIBLE_DEVICES is set, respect user choice and return 0
+        # (the index is relative to the visible-device subset).
+        if os.environ.get("CUDA_VISIBLE_DEVICES"):
+            return 0
+
+        num_gpus = torch.cuda.device_count()
+        if num_gpus <= 1:
+            return 0
+
+        best_gpu = 0
+        best_free_mem = -1.0
+        for i in range(num_gpus):
+            try:
+                allocated = torch.cuda.memory_allocated(i)
+                props = torch.cuda.get_device_properties(i)
+                total_mem = getattr(props, "total_mem", getattr(props, "total_memory", 0))
+                free_mem = total_mem - allocated
+                if free_mem > best_free_mem:
+                    best_free_mem = free_mem
+                    best_gpu = i
+            except Exception as e:
+                logger.debug("GPU %d info query failed: %s", i, e)
+
+        logger.info("Auto-selected GPU %d (free mem: %.1f GB)", best_gpu, best_free_mem / 1e9)
+        return best_gpu
+
+    def get_gpu_info(self) -> List[Dict[str, Any]]:
+        """Return a list of GPU info dicts, cached after first call.
+
+        Returns an empty list if CUDA is not available.
+        """
+        if self._gpu_info_cache is not None:
+            return self._gpu_info_cache
+
+        if not torch.cuda.is_available():
+            self._gpu_info_cache = []
+            return self._gpu_info_cache
+
+        info_list: List[Dict[str, Any]] = []
+        for i in range(torch.cuda.device_count()):
+            try:
+                props = torch.cuda.get_device_properties(i)
+                total_mem = getattr(props, "total_mem", getattr(props, "total_memory", 0))
+                allocated = torch.cuda.memory_allocated(i)
+                info_list.append({
+                    "index": i,
+                    "name": props.name,
+                    "total_memory_gb": total_mem / 1e9,
+                    "allocated_gb": allocated / 1e9,
+                    "free_memory_gb": (total_mem - allocated) / 1e9,
+                })
+            except Exception as e:
+                logger.debug("GPU %d info query failed: %s", i, e)
+
+        self._gpu_info_cache = info_list
+        return self._gpu_info_cache

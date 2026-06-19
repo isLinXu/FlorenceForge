@@ -151,79 +151,52 @@ class TVPPipeline:
         return all_results
 
     def _run_sft(self, stage: PipelineStageConfig) -> Dict[str, Any]:
-        """Run Stage 1: Supervised Fine-Tuning."""
-        from ..training.sft_trainer import SFTTrainer  # lazy import
+        """Run Stage 1: Supervised Fine-Tuning via MultiTaskTrainer bridge."""
+        from .tvp_training import run_tvp_sft_with_multitask_trainer
 
-        cfg = self._load_stage_config(stage)
-        trainer = SFTTrainer.from_config(cfg)
-        results = trainer.train()
-        return results
+        config_path = stage.config_path
+        if not config_path:
+            raise ValueError("SFT stage is missing config_path")
+
+        return run_tvp_sft_with_multitask_trainer(
+            config_path,
+            checkpoint_dir=stage.checkpoint_dir or None,
+        )
 
     def _run_opd(self, stage: PipelineStageConfig) -> Dict[str, Any]:
         """Run Stage 2: On-Policy Distillation."""
-        from ..training.opd_trainer import OPDTrainer
+        from .tvp_training import run_tvp_opd
 
-        cfg = self._load_stage_config(stage)
-
-        # Resolve student model from previous stage checkpoint
         sft_stage = self.stage_map.get("sft")
+        student_checkpoint = None
         if sft_stage and sft_stage.checkpoint_dir:
-            cfg.setdefault("student_model", str(
-                Path(sft_stage.checkpoint_dir) / "final"
-            ))
+            student_checkpoint = str(Path(sft_stage.checkpoint_dir) / "final")
 
-        trainer = OPDTrainer(
-            student=cfg.get("student"),
-            teachers=cfg.get("teachers", []),
-            teacher_weights=cfg.get("teacher_weights"),
-            temperature=cfg.get("temperature", 2.0),
-            ce_coeff=cfg.get("ce_coeff", 0.3),
+        return run_tvp_opd(
+            stage.config_path,
+            checkpoint_dir=stage.checkpoint_dir or None,
+            student_checkpoint=student_checkpoint,
         )
-        results = {}
-        for epoch in range(cfg.get("epochs", 2)):
-            epoch_results = trainer.train_epoch(
-                dataloader=cfg.get("dataloader"),
-                epoch=epoch,
-                save_dir=Path(stage.checkpoint_dir),
-            )
-            results[f"epoch_{epoch}"] = epoch_results
-        return results
 
     def _run_grpo(self, stage: PipelineStageConfig) -> Dict[str, Any]:
         """Run Stage 3: GRPO Reinforcement Learning."""
-        from ..training.grpo_trainer import GRPOTrainer
-        from ..training.reward_models import build_reward_models
+        from .tvp_training import run_tvp_grpo
 
-        cfg = self._load_stage_config(stage)
-
-        # Resolve model from previous stage checkpoint
         opd_stage = self.stage_map.get("opd")
+        sft_stage = self.stage_map.get("sft")
+        model_checkpoint = None
+        ref_checkpoint = None
         if opd_stage and opd_stage.checkpoint_dir:
-            cfg.setdefault("model_name_or_path", str(
-                Path(opd_stage.checkpoint_dir) / "final"
-            ))
+            model_checkpoint = str(Path(opd_stage.checkpoint_dir) / "final")
+        if sft_stage and sft_stage.checkpoint_dir:
+            ref_checkpoint = str(Path(sft_stage.checkpoint_dir) / "final")
 
-        reward_fns = build_reward_models(
-            task_type=cfg.get("task_type", "mixed"),
+        return run_tvp_grpo(
+            stage.config_path,
+            checkpoint_dir=stage.checkpoint_dir or None,
+            model_checkpoint=model_checkpoint,
+            ref_checkpoint=ref_checkpoint,
         )
-
-        trainer = GRPOTrainer(
-            model=cfg.get("model"),
-            ref_model=cfg.get("ref_model"),
-            tokenizer=cfg.get("tokenizer"),
-            reward_fns=reward_fns,
-            group_size=cfg.get("group_size", 4),
-            kl_coeff=cfg.get("kl_coeff", 0.04),
-        )
-
-        results = {}
-        for epoch in range(cfg.get("epochs", 2)):
-            epoch_results = trainer.train_epoch(
-                dataloader=cfg.get("dataloader"),
-                epoch=epoch,
-            )
-            results[f"epoch_{epoch}"] = epoch_results
-        return results
 
     @staticmethod
     def _stage_checkpoint_exists(stage: PipelineStageConfig) -> bool:
