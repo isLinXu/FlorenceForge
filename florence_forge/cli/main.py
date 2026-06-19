@@ -72,6 +72,7 @@ from .commands import (  # noqa: E402
     run_inference_task,
     run_serve_task,
     run_training_task,
+    run_tvp_training_task,
 )
 
 
@@ -207,11 +208,11 @@ def list_available_tasks() -> None:
         print("📋 Florence-2 原生任务:")
         for category in TaskCategory:
             tasks = [name for name, config in FLORENCE2_TASKS.items() 
-                    if config['category'] == category]
+                    if config.category == category]
             if tasks:
                 print(f"  {category.value}:")
                 for task in tasks:
-                    desc = FLORENCE2_TASKS[task]['description']
+                    desc = FLORENCE2_TASKS[task].description
                     print(f"    - {task}: {desc}")
     
     print("\n🎯 预配置训练任务:")
@@ -479,6 +480,19 @@ def create_parser() -> argparse.ArgumentParser:
         '--resume', '-r',
         help='从检查点恢复训练 (检查点目录路径)'
     )
+    train_parser.add_argument(
+        '--tvp-config',
+        help='TVP 阶段 YAML 配置（如 configs/tvp/sft.yaml），走 MultiTaskTrainer 桥接训练'
+    )
+    train_parser.add_argument(
+        '--tvp-pipeline',
+        help='TVP 三阶段 pipeline YAML（如 configs/tvp/pipeline.yaml）'
+    )
+    train_parser.add_argument(
+        '--tvp-stage',
+        choices=['sft', 'opd', 'grpo'],
+        help='仅运行指定 TVP 阶段（需配合 --tvp-config）'
+    )
     
     # 列出任务命令
     subparsers.add_parser('list-tasks', help='列出所有可用任务')
@@ -564,31 +578,69 @@ def create_parser() -> argparse.ArgumentParser:
     infer_parser.add_argument(
         '--structured-vp',
         action='store_true',
-        help='启用结构化视觉原语解码（将原生输出转为VP证据链）',
+        help='Enable structured visual primitive decoding',
+    )
+    infer_parser.add_argument(
+        '--structured-vp-mode',
+        choices=['auto', 'decode', 'off'],
+        default='auto',
+        help='Structured VP mode: auto/decode/off',
+    )
+    infer_parser.add_argument(
+        '--structured-vp-decode',
+        action='store_true',
+        default=False,
+        help='Force VP decoding',
     )
     infer_parser.add_argument(
         '--vp-box-format',
         default='loc_tokens',
         choices=['loc_tokens', 'json', 'quad'],
-        help='VP解码输出的bbox格式 (默认: loc_tokens)',
+        help='VP decode bbox format (default: loc_tokens)',
     )
     infer_parser.add_argument(
+        '--structured-vp-marker-style',
         '--vp-marker-style',
+        dest='structured_vp_marker_style',
         default='special',
-        choices=['special', 'angle_bracket'],
-        help='VP解码标记风格 (默认: special)',
+        choices=['special', 'angle_bracket', 'plain'],
+        help='VP decode marker style (default: special)',
     )
     infer_parser.add_argument(
+        '--structured-vp-max-boxes-per-label',
         '--vp-max-boxes-per-label',
+        dest='structured_vp_max_boxes_per_label',
         type=int,
         default=None,
-        help='VP解码：每个标签最多保留的框数',
+        help='VP decode: max boxes per label',
     )
     infer_parser.add_argument(
+        '--structured-vp-max-total-boxes',
+        dest='structured_vp_max_total_boxes',
+        type=int,
+        default=None,
+        help='VP decode: max total boxes',
+    )
+    infer_parser.add_argument(
+        '--structured-vp-filter-policy',
+        dest='structured_vp_filter_policy',
+        choices=['none', 'nms', 'score'],
+        default='none',
+        help='VP decode: box filter policy (default: none)',
+    )
+    infer_parser.add_argument(
+        '--structured-vp-nms-iou-threshold',
         '--vp-nms-iou-threshold',
+        dest='structured_vp_nms_iou_threshold',
         type=float,
         default=None,
-        help='VP解码：NMS IoU阈值（过滤重叠框）',
+        help='VP decode: NMS IoU threshold',
+    )
+    infer_parser.add_argument(
+        '--structured-vp-allowed-labels',
+        dest='structured_vp_allowed_labels',
+        default=None,
+        help='VP decode: allowed labels (comma-separated)',
     )
     
     # 数据转换命令
@@ -672,13 +724,18 @@ def create_parser() -> argparse.ArgumentParser:
     vp_coco_parser.add_argument('--output', '-o', required=True, help='输出文件路径')
     vp_coco_parser.add_argument(
         '--vp-task', default='OD_VP',
-        choices=['OD_VP', 'COUNT_VP', 'PHRASE_GROUNDING_VP'],
-        help='VP任务类型 (默认: OD_VP)',
+        choices=['OD_VP', 'COUNT_VP', 'PHRASE_GROUNDING_VP', 'COUNT_VP_COT'],
+        help='VP/TVP任务类型 (默认: OD_VP)',
     )
     vp_coco_parser.add_argument(
         '--box-format', default='json',
-        choices=['json', 'quad'],
-        help='VP bbox格式 (默认: json)',
+        choices=['json', 'loc_tokens', 'quad'],
+        help='VP bbox格式 (默认: json; quad 为 json 别名)',
+    )
+    vp_coco_parser.add_argument(
+        '--counting-mode', default='coarse',
+        choices=['coarse', 'fine'],
+        help='COUNT_VP_COT 计数思维链模式 (默认: coarse)',
     )
     vp_coco_parser.add_argument(
         '--marker-style', default='special',
@@ -700,8 +757,8 @@ def create_parser() -> argparse.ArgumentParser:
     )
     vp_yolo_parser.add_argument(
         '--box-format', default='json',
-        choices=['json', 'quad'],
-        help='VP bbox格式 (默认: json)',
+        choices=['json', 'loc_tokens', 'quad'],
+        help='VP bbox格式 (默认: json; quad 为 json 别名)',
     )
     vp_yolo_parser.add_argument(
         '--marker-style', default='special',
@@ -709,11 +766,157 @@ def create_parser() -> argparse.ArgumentParser:
         help='VP标记风格 (默认: special)',
     )
     vp_yolo_parser.add_argument('--image-ext', default='.jpg', help='图像文件扩展名')
+
+    def _add_tvp_jsonl_parser(name: str, help_text: str) -> argparse.ArgumentParser:
+        parser = convert_subparsers.add_parser(name, help=help_text)
+        parser.add_argument('--input', required=True, help='输入 JSONL 文件路径')
+        parser.add_argument('--images-dir', required=True, help='图像文件目录')
+        parser.add_argument('--output', '-o', required=True, help='输出 JSONL 文件路径')
+        parser.add_argument(
+            '--marker-style', default='special',
+            choices=['special', 'angle_bracket'],
+            help='VP标记风格 (默认: special)',
+        )
+        return parser
+
+    tvp_count_parser = convert_subparsers.add_parser(
+        'tvp-count-cot', help='COCO 标注转 TVP 计数思维链格式',
+    )
+    tvp_count_parser.add_argument('--json-file', required=True, help='COCO JSON 文件路径')
+    tvp_count_parser.add_argument('--images-dir', required=True, help='图像文件目录')
+    tvp_count_parser.add_argument('--output', '-o', required=True, help='输出 JSONL 文件路径')
+    tvp_count_parser.add_argument(
+        '--counting-mode', default='coarse',
+        choices=['coarse', 'fine'],
+        help='计数思维链模式 (默认: coarse)',
+    )
+    tvp_count_parser.add_argument(
+        '--marker-style', default='special',
+        choices=['special', 'angle_bracket'],
+        help='VP标记风格 (默认: special)',
+    )
+
+    tvp_maze_parser = _add_tvp_jsonl_parser('tvp-maze', '迷宫 JSONL 转 TVP point 思维链')
+    tvp_path_parser = _add_tvp_jsonl_parser('tvp-path', '路径追踪 JSONL 转 TVP point 思维链')
+    tvp_spatial_parser = _add_tvp_jsonl_parser('tvp-spatial', '空间推理 JSONL 转 TVP 思维链')
+
+    generate_tvp_maze_parser = convert_subparsers.add_parser(
+        'generate-tvp-maze',
+        help='合成迷宫数据（PNG + 原始 JSONL）',
+    )
+    generate_tvp_maze_parser.add_argument('--output-dir', '-o', required=True, help='输出目录')
+    generate_tvp_maze_parser.add_argument('--num-samples', type=int, default=100, help='样本数量')
+    generate_tvp_maze_parser.add_argument('--rows', type=int, default=8, help='迷宫行数')
+    generate_tvp_maze_parser.add_argument('--cols', type=int, default=8, help='迷宫列数')
+    generate_tvp_maze_parser.add_argument('--seed', type=int, default=42, help='随机种子')
+
+    generate_tvp_path_parser = convert_subparsers.add_parser(
+        'generate-tvp-path',
+        help='合成路径追踪数据（PNG + 原始 JSONL）',
+    )
+    generate_tvp_path_parser.add_argument('--output-dir', '-o', required=True, help='输出目录')
+    generate_tvp_path_parser.add_argument('--num-samples', type=int, default=100, help='样本数量')
+    generate_tvp_path_parser.add_argument('--seed', type=int, default=42, help='随机种子')
+
+    generate_tvp_spatial_parser = convert_subparsers.add_parser(
+        'generate-tvp-spatial',
+        help='合成空间推理数据（PNG + 原始 JSONL）',
+    )
+    generate_tvp_spatial_parser.add_argument('--output-dir', '-o', required=True, help='输出目录')
+    generate_tvp_spatial_parser.add_argument('--num-samples', type=int, default=100, help='样本数量')
+    generate_tvp_spatial_parser.add_argument('--seed', type=int, default=42, help='随机种子')
+
+    generate_tvp_all_parser = convert_subparsers.add_parser(
+        'generate-tvp-all',
+        help='一次性合成 maze/path/spatial 三类 TVP 原始数据',
+    )
+    generate_tvp_all_parser.add_argument('--output-dir', '-o', required=True, help='输出根目录')
+    generate_tvp_all_parser.add_argument('--num-samples', type=int, default=8, help='每类样本数量')
+    generate_tvp_all_parser.add_argument('--seed', type=int, default=42, help='随机种子')
     
+    # ── VP sub-type convert commands (test-aligned) ───────────────
+    vp_coco_od_parser = convert_subparsers.add_parser(
+        'vp-coco-od', help='COCO OD to VP format (OD_VP task)',
+    )
+    vp_coco_od_parser.add_argument('--json-file', required=True, help='COCO JSON file path')
+    vp_coco_od_parser.add_argument('--images-dir', required=True, help='Image directory')
+    vp_coco_od_parser.add_argument('--output', '-o', required=True, help='Output file path')
+    vp_coco_od_parser.add_argument(
+        '--task-type', default='OD_VP',
+        help='Task type (default: OD_VP)',
+    )
+    vp_coco_od_parser.add_argument(
+        '--box-format', default='json',
+        choices=['json', 'loc_tokens', 'quad'],
+        help='VP bbox format (default: json)',
+    )
+    vp_coco_od_parser.add_argument(
+        '--marker-style', default='special',
+        choices=['special', 'angle_bracket', 'plain'],
+        help='VP marker style (default: special)',
+    )
+    vp_coco_od_parser.set_defaults(func=run_data_conversion)
+
+    vp_yolo_count_parser = convert_subparsers.add_parser(
+        'vp-yolo-count', help='YOLO to VP counting format (COUNT_VP task)',
+    )
+    vp_yolo_count_parser.add_argument('--labels-dir', required=True, help='YOLO labels directory')
+    vp_yolo_count_parser.add_argument('--images-dir', required=True, help='Image directory')
+    vp_yolo_count_parser.add_argument('--classes-file', required=True, help='Classes file path')
+    vp_yolo_count_parser.add_argument('--output', '-o', required=True, help='Output file path')
+    vp_yolo_count_parser.add_argument(
+        '--task-type', default='COUNT_VP',
+        help='Task type (default: COUNT_VP)',
+    )
+    vp_yolo_count_parser.add_argument(
+        '--box-format', default='json',
+        choices=['json', 'loc_tokens', 'quad'],
+        help='VP bbox format (default: json)',
+    )
+    vp_yolo_count_parser.add_argument(
+        '--marker-style', default='special',
+        choices=['special', 'angle_bracket', 'plain'],
+        help='VP marker style (default: special)',
+    )
+    vp_yolo_count_parser.add_argument('--image-ext', default='.jpg', help='Image extension')
+    vp_yolo_count_parser.set_defaults(func=run_data_conversion)
+
+    vp_jsonl_grounding_parser = convert_subparsers.add_parser(
+        'vp-jsonl-grounding', help='VP OD JSONL to grounding VP JSONL',
+    )
+    vp_jsonl_grounding_parser.add_argument('--input', required=True, help='Input JSONL file path')
+    vp_jsonl_grounding_parser.add_argument('--output', '-o', required=True, help='Output JSONL file path')
+    vp_jsonl_grounding_parser.add_argument(
+        '--task-type', default='PHRASE_GROUNDING_VP',
+        help='Task type (default: PHRASE_GROUNDING_VP)',
+    )
+    vp_jsonl_grounding_parser.add_argument(
+        '--box-format', default='loc_tokens',
+        choices=['json', 'loc_tokens', 'quad'],
+        help='VP bbox format (default: loc_tokens)',
+    )
+    vp_jsonl_grounding_parser.add_argument(
+        '--marker-style', default='plain',
+        choices=['special', 'angle_bracket', 'plain'],
+        help='VP marker style (default: plain)',
+    )
+    vp_jsonl_grounding_parser.set_defaults(func=run_data_conversion)
+
     # ── VP (Visual Primitive) 数据转换 ──────────────────────────────
-    # 设置 VP 子命令的默认处理函数
-    vp_coco_parser.set_defaults(func=run_data_conversion)
-    vp_yolo_parser.set_defaults(func=run_data_conversion)
+    # 设置 VP/TVP 子命令的默认处理函数
+    for _parser in (
+        vp_coco_parser,
+        vp_yolo_parser,
+        tvp_count_parser,
+        tvp_maze_parser,
+        tvp_path_parser,
+        tvp_spatial_parser,
+        generate_tvp_maze_parser,
+        generate_tvp_path_parser,
+        generate_tvp_spatial_parser,
+        generate_tvp_all_parser,
+    ):
+        _parser.set_defaults(func=run_data_conversion)
 
     # 推理服务器命令
     serve_parser = subparsers.add_parser('serve', help='启动模型推理服务')
@@ -784,6 +987,18 @@ def create_parser() -> argparse.ArgumentParser:
         default='auto',
         help='评估设备 (默认: auto)'
     )
+    eval_parser.add_argument(
+        '--benchmark',
+        choices=['default', 'tvp'],
+        default='default',
+        help='评估模式: default=标准多任务评估, tvp=TVP 思维链 benchmark',
+    )
+    eval_parser.add_argument(
+        '--max-samples',
+        type=int,
+        default=None,
+        help='TVP benchmark 最大样本数 (仅 --benchmark tvp 时生效)',
+    )
     
     return parser
 
@@ -828,13 +1043,27 @@ def main() -> None:
             overrides['device'] = args.device
         if hasattr(args, 'resume') and args.resume:
             overrides['resume'] = args.resume
-        
-        success = run_training_task(
-            task=args.task,
-            config=args.config,
-            override=args.override,
-            **overrides
-        )
+
+        if getattr(args, 'tvp_pipeline', None):
+            success = run_tvp_training_task(
+                tvp_pipeline=args.tvp_pipeline,
+                override=args.override,
+                **overrides,
+            )
+        elif getattr(args, 'tvp_config', None):
+            success = run_tvp_training_task(
+                tvp_config=args.tvp_config,
+                tvp_stage=getattr(args, 'tvp_stage', None),
+                override=args.override,
+                **overrides,
+            )
+        else:
+            success = run_training_task(
+                task=args.task,
+                config=args.config,
+                override=args.override,
+                **overrides
+            )
         sys.exit(0 if success else 1)
         
     elif args.command == 'list-tasks':

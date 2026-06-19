@@ -272,8 +272,18 @@ class TestTVPChainBuilder:
             "cat", [[100, 100, 200, 200]], count=1
         )
         assert "cat" in chain
-        assert "1 cat" in chain
+        assert "The total number is 1" in chain
         assert "<|box|>" in chain
+
+    def test_fine_grained_counting_chain(self):
+        from florence_forge.data.tvp_converter import TVPChainBuilder
+        chain = TVPChainBuilder.build_fine_grained_counting_chain(
+            "cat", [[100, 100, 200, 200], [300, 300, 400, 400]], count=2
+        )
+        assert "What am I looking for" in chain
+        assert "Instance 1" in chain
+        assert "Instance 2" in chain
+        assert "There are 2 cat" in chain
 
     def test_maze_chain_solvable(self):
         from florence_forge.data.tvp_converter import TVPChainBuilder
@@ -314,7 +324,7 @@ class TestTVPChainBuilder:
             answer="left",
         )
         assert "left" in chain
-        assert "Observation" in chain
+        assert "Analyzing the request" in chain
 
 
 class TestSpatialReasoningConverter:

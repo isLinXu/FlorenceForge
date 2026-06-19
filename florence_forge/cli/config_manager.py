@@ -362,10 +362,10 @@ class ConfigManager:
         categories = {}
         
         for task_name, task_info in FLORENCE2_TASKS.items():
-            category = task_info['category'].value
+            category = task_info.category.value
             if category not in categories:
                 categories[category] = []
-            categories[category].append((task_name, task_info['description']))
+            categories[category].append((task_name, task_info.description))
         
         for category, task_list in categories.items():
             print(f"\n{category.upper()}:")

@@ -325,7 +325,7 @@ def draw_bounding_boxes(
 
     try:
         font = ImageFont.truetype("/System/Library/Fonts/Arial.ttf", font_size)
-    except:
+    except (OSError, IOError):
         font = ImageFont.load_default()
 
     for i, box in enumerate(boxes):

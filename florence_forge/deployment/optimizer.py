@@ -17,10 +17,11 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 
-class ModelOptimizer:
-    """模型优化器
+class DeploymentOptimizer:
+    """部署模型优化器
     
-    提供多种模型优化技术
+    提供多种模型优化技术（量化、剪枝、蒸馏等），专注于部署场景。
+    与 utils.optimization.ModelOptimizer（通用运行时优化工具）不同。
     """
     
     def __init__(self, model: nn.Module):
