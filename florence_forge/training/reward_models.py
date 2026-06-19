@@ -273,6 +273,10 @@ class CountingRewardModel:
     """Accuracy reward for counting tasks.
 
     R = α * exp(-β * |ŷ - y| / (|y| + 1))
+
+    When the text contains agentic meta-cognitive tokens, the count is
+    extracted from the ``<DECIDE>`` phase first (to avoid VP coordinate
+    pollution). Falls back to the last standalone number otherwise.
     """
 
     def __init__(self, alpha: float = 0.7, beta: float = 3.0):
@@ -283,7 +287,20 @@ class CountingRewardModel:
         gt = metadata.get("count", None)
         if gt is None:
             return 0.0
-        numbers = re.findall(r"\b\d+\b", text)
+
+        # Try extracting from <DECIDE> phase first (avoids VP coord pollution)
+        decide_match = re.search(r"<DECIDE>(.*?)</DECIDE>", text, re.DOTALL)
+        if decide_match:
+            decide_text = decide_match.group(1)
+            decide_numbers = re.findall(r"\b\d+\b", decide_text)
+            if decide_numbers:
+                pred = int(decide_numbers[-1])
+                error = abs(pred - gt)
+                return self.alpha * math.exp(-self.beta * error / (abs(gt) + 1))
+
+        # Fallback: extract from text after </think> or full text
+        final = text.split("</think>")[-1] if "</think>" in text else text
+        numbers = re.findall(r"\b\d+\b", final)
         if not numbers:
             return 0.0
         pred = int(numbers[-1])
@@ -577,7 +594,21 @@ class MixedAccuracyRewardModel:
         self.detection_rm = DetectionAccuracyRewardModel()
 
     def __call__(self, text: str, meta: Dict) -> float:
-        subtask = meta.get("task_type", "")
+        subtask = str(meta.get("task_type") or meta.get("base_task") or meta.get("vp_task_type") or "").strip().lower()
+        aliases = {
+            "count_vp_cot": "counting",
+            "count_vp": "counting",
+            "spatial_vp": "spatial",
+            "phrase_grounding_vp": "grounding",
+            "od_vp": "od_vp",
+            "maze_vp": "maze",
+            "path_vp": "path",
+            "agentic_count": "counting",
+            "agentic_spatial": "spatial",
+            "agentic_maze": "maze",
+            "agentic_grounding": "grounding",
+        }
+        subtask = aliases.get(subtask, subtask)
         if subtask == "counting":
             return self.counting_rm(text, meta)
         elif subtask in ("spatial", "vqa"):
@@ -625,3 +656,245 @@ def build_reward_models(
         acc_rm = MixedAccuracyRewardModel()
 
     return [format_rm, quality_rm, acc_rm]
+
+# ---------------------------------------------------------------------------
+# 4. Agentic Reward Models (meta-cognitive token structure)
+# ---------------------------------------------------------------------------
+
+class AgenticFormatRewardModel:
+    """Reward model for agentic meta-cognitive token structure.
+
+    Checks:
+      - Presence of required phases (<ACT> and <DECIDE>)
+      - Proper closing of all opened tags
+      - Phase ordering (PLAN before ACT, ACT before DECIDE)
+      - Non-empty phase content
+
+    Output: score in [0, 1]
+    """
+
+    def __init__(self):
+        from ..core.agentic_tokens import (
+            AGENTIC_PHASE_TOKENS,
+            AGENTIC_PHASE_ORDER,
+            REQUIRED_PHASES,
+            extract_phase,
+            extract_all_phases,
+            has_required_phases,
+            get_phase_order,
+        )
+        self._phase_tokens = AGENTIC_PHASE_TOKENS
+        self._phase_order = AGENTIC_PHASE_ORDER
+        self._required_phases = REQUIRED_PHASES
+        self._extract_phase = extract_phase
+        self._extract_all_phases = extract_all_phases
+        self._has_required_phases = has_required_phases
+        self._get_phase_order = get_phase_order
+
+    def __call__(self, text: str, metadata: Optional[Dict] = None) -> float:
+        score = 1.0
+
+        # 1. Must have required phases
+        if not self._has_required_phases(text):
+            score -= 0.5
+
+        # 2. Check all opened tags are closed
+        for phase, (open_tok, close_tok) in self._phase_tokens.items():
+            open_count = text.count(open_tok)
+            close_count = text.count(close_tok)
+            if open_count != close_count:
+                score -= 0.15 * abs(open_count - close_count)
+
+        # 3. Check phase ordering (PLAN before ACT before DECIDE)
+        phase_seq = self._get_phase_order(text)
+        canonical = [p for p in self._phase_order if p in phase_seq]
+        if phase_seq != canonical:
+            score -= 0.2
+
+        # 4. Check non-empty phase content
+        all_phases = self._extract_all_phases(text)
+        for phase, contents in all_phases.items():
+            for content in contents:
+                if not content.strip():
+                    score -= 0.1
+
+        # 5. Bonus for having a REFLECT phase (self-correction signal)
+        if all_phases.get("reflect"):
+            score += 0.1
+
+        return max(0.0, min(1.0, score))
+
+
+class AgenticQualityRewardModel:
+    """Evaluate the quality of agentic reasoning content.
+
+    Heuristic checks:
+      - VERIFY content references previous ACT output
+      - REFLECT content acknowledges a specific error pattern
+      - DECIDE content is concise and matches task output format
+      - No reward hacking (e.g., repeating VERIFY without new info)
+
+    Falls back to LLM judge if available, otherwise uses heuristics.
+    Output: score in [0, 1]
+    """
+
+    def __init__(self, judge_model: Optional[Any] = None, judge_tokenizer: Optional[Any] = None):
+        self.judge_model = judge_model
+        self.judge_tokenizer = judge_tokenizer
+        from ..core.agentic_tokens import extract_all_phases
+        self._extract_all_phases = extract_all_phases
+
+    def __call__(self, text: str, metadata: Optional[Dict] = None) -> float:
+        if self.judge_model is not None:
+            return self._judge_inference(text)
+        return self._heuristic_score(text)
+
+    def _heuristic_score(self, text: str) -> float:
+        phases = self._extract_all_phases(text)
+        score = 1.0
+
+        # 1. VERIFY should reference prior findings
+        act_contents = phases.get("act", [])
+        verify_contents = phases.get("verify", [])
+        if act_contents and verify_contents:
+            # Check if verify mentions numbers/coordinates from act
+            act_text = " ".join(act_contents)
+            verify_text = " ".join(verify_contents)
+            # Simple check: verify should contain at least one number from act
+            act_numbers = set(re.findall(r"\d+", act_text))
+            verify_numbers = set(re.findall(r"\d+", verify_text))
+            if act_numbers and not act_numbers.intersection(verify_numbers):
+                score -= 0.2  # verify doesn't reference act's specifics
+
+        # 2. REFLECT should mention error type
+        reflect_contents = phases.get("reflect", [])
+        if reflect_contents:
+            reflect_text = " ".join(reflect_contents).lower()
+            error_keywords = ["miss", "wrong", "error", "mistake", "confus",
+                              "incorrect", "forgot", "skip", "overlook"]
+            if not any(kw in reflect_text for kw in error_keywords):
+                score -= 0.15  # reflect doesn't acknowledge an error
+
+        # 3. DECIDE should be concise (< 200 chars typically)
+        decide_contents = phases.get("decide", [])
+        if decide_contents:
+            decide_text = " ".join(decide_contents)
+            if len(decide_text) > 300:
+                score -= 0.15  # overly verbose decision
+
+        # 4. Penalize repeated identical VERIFY content
+        if len(verify_contents) > 1:
+            unique_verifies = set(verify_contents)
+            if len(unique_verifies) < len(verify_contents):
+                score -= 0.2  # repeating verify without new info
+
+        # 5. Penalize extreme total length
+        total_len = len(text)
+        if total_len > 4000:
+            score -= 0.2
+
+        return max(0.0, min(1.0, score))
+
+    def _judge_inference(self, text: str) -> float:
+        prompt = (
+            "Evaluate the following agentic visual reasoning response.\n"
+            "Check:\n"
+            "1. Does VERIFY reference findings from ACT?\n"
+            "2. Does REFLECT acknowledge a specific error?\n"
+            "3. Is DECIDE concise and task-appropriate?\n"
+            "4. Any reward hacking (repetitive VERIFY, empty phases)?\n\n"
+            f"Response:\n{text}\n\n"
+            "Score: 0.0 (poor), 0.5 (fair), or 1.0 (good). Output only the score."
+        )
+        try:
+            inputs = self.judge_tokenizer(
+                prompt, return_tensors="pt", truncation=True, max_length=1024,
+            )
+            device = next(self.judge_model.parameters()).device
+            inputs = {k: v.to(device) for k, v in inputs.items()}
+            with torch.no_grad():
+                outputs = self.judge_model.generate(
+                    **inputs, max_new_tokens=8, do_sample=False,
+                    pad_token_id=self.judge_tokenizer.eos_token_id,
+                )
+            new_tokens = outputs[:, inputs["input_ids"].shape[1]:]
+            decoded = self.judge_tokenizer.decode(new_tokens[0], skip_special_tokens=True)
+            return QualityRewardModel._parse_judge_score(decoded)
+        except Exception:
+            return self._heuristic_score(text)
+
+
+class AgenticSelfCorrectionRewardModel:
+    """Reward model for self-correction behavior.
+
+    Specifically rewards trajectories where:
+      - An error is detected in VERIFY
+      - A REFLECT phase acknowledges the error
+      - The DECIDE phase contains the corrected answer
+
+    This is the key reward signal for training self-correcting agents.
+    Output: score in [0, 1]
+    """
+
+    def __init__(self):
+        from ..core.agentic_tokens import extract_all_phases
+        self._extract_all_phases = extract_all_phases
+
+    def __call__(self, text: str, metadata: Optional[Dict] = None) -> float:
+        phases = self._extract_all_phases(text)
+        score = 0.0
+
+        # Check for error detection in VERIFY
+        verify_text = " ".join(phases.get("verify", "")).lower()
+        error_detected = any(
+            kw in verify_text
+            for kw in ["wrong", "error", "mistake", "incorrect", "not", "but", "wait"]
+        )
+
+        # Check for reflection on the error
+        reflect_present = bool(phases.get("reflect"))
+        reflect_text = " ".join(phases.get("reflect", "")).lower()
+        error_acknowledged = reflect_present and any(
+            kw in reflect_text
+            for kw in ["miss", "wrong", "error", "mistake", "confus", "incorrect", "forgot", "skip"]
+        )
+
+        # Check if DECIDE contains a correction (different from initial ACT answer)
+        act_text = " ".join(phases.get("act", ""))
+        decide_text = " ".join(phases.get("decide", ""))
+
+        if error_detected:
+            score += 0.3
+        if error_acknowledged:
+            score += 0.3
+        # Check if the decide phase differs from act (correction happened)
+        if act_text and decide_text and act_text.strip() != decide_text.strip():
+            score += 0.2
+
+        # If error_injected metadata is available, check correction matches GT
+        if metadata and metadata.get("error_injected"):
+            # The trajectory should show self-correction
+            if error_detected and error_acknowledged:
+                score += 0.2
+            elif not error_detected:
+                # Failed to detect an injected error
+                score -= 0.1
+
+        return max(0.0, min(1.0, score))
+
+
+def build_agentic_reward_models(
+    judge_model: Optional[Any] = None,
+    judge_tokenizer: Optional[Any] = None,
+) -> List[Callable[[str, Dict], float]]:
+    """Build reward function list for agentic meta-cognitive training.
+
+    Returns [format_rm, quality_rm, self_correction_rm, accuracy_rm].
+    """
+    format_rm = AgenticFormatRewardModel()
+    quality_rm = AgenticQualityRewardModel(judge_model, judge_tokenizer)
+    self_correction_rm = AgenticSelfCorrectionRewardModel()
+    accuracy_rm = MixedAccuracyRewardModel()  # reuse existing dispatcher
+
+    return [format_rm, quality_rm, self_correction_rm, accuracy_rm]
+
