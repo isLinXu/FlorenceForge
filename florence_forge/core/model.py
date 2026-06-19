@@ -19,7 +19,7 @@ from .backends.base_vlm import _check_flash_attn_availability, _patch_transforme
 
 
 from .config import ModelConfig, LoRAConfig, TrainingConfig
-from .tasks import FLORENCE2_TASKS, get_task_config
+from .tasks import FLORENCE2_TASKS, get_task_config, get_task_config_typed
 from .backends import VLMBackendRegistry, BaseVLMBackend
 
 
@@ -252,15 +252,15 @@ class Florence2MultiTaskModel(nn.Module):
         **kwargs
     ) -> Union[str, List[str]]:
         """执行特定任务的预测"""
-        task_config = get_task_config(task_name)
+        task_config = get_task_config_typed(task_name)
         generation_kwargs = {
-            "max_new_tokens": task_config.get("max_new_tokens", 1024),
-            "num_beams": task_config.get("num_beams", 3)
+            "max_new_tokens": task_config.max_new_tokens,
+            "num_beams": task_config.num_beams
         }
         generation_kwargs.update(kwargs)
         return self.generate(
             images=images,
-            task_prompt=task_config["prompt"],
+            task_prompt=task_config.prompt,
             text_input=text_input,
             **generation_kwargs
         )
@@ -301,7 +301,8 @@ class Florence2MultiTaskModel(nn.Module):
             target_modules=self.config.lora_config.target_modules,
             lora_dropout=self.config.lora_config.lora_dropout,
             bias=self.config.lora_config.bias,
-            task_type=self.config.lora_config.task_type
+            task_type=self.config.lora_config.task_type,
+            modules_to_save=self.config.lora_config.modules_to_save or None,
         )
 
         try:

@@ -105,6 +105,7 @@ class Florence2Backend(BaseVLMBackend):
 
     ARCHITECTURE_TYPE = "encoder_decoder"
     BACKEND_NAME = "florence-2"
+    GENERATE_DEFAULTS: dict = {"use_cache": False}
 
     def __init__(self, config: Any):
         """初始化
@@ -156,6 +157,11 @@ class Florence2Backend(BaseVLMBackend):
         """加载 Florence-2 Processor"""
         self._load_processor_base(AutoProcessor, self.config.model_name)
 
+    def _post_load_setup(self) -> None:
+        """Register special tokens after both model and processor are loaded."""
+        self._maybe_add_visual_primitive_tokens()
+        self._maybe_add_agentic_tokens()
+
     # ------------------------------------------------------------------
     # 2. 任务相关（Florence-2 特有映射）
     # ------------------------------------------------------------------
@@ -188,6 +194,24 @@ class Florence2Backend(BaseVLMBackend):
         added = tokenizer.add_tokens(list(VISUAL_PRIMITIVE_SPECIAL_TOKENS), special_tokens=True)
         if added > 0:
             self._model.resize_token_embeddings(len(tokenizer))
+
+    def _maybe_add_agentic_tokens(self) -> None:
+        """Register meta-cognitive agentic tokens and resize embeddings."""
+        if not getattr(self.config, 'enable_agentic_tokens', False):
+            return
+        if self._processor is None or self._model is None:
+            return
+
+        from ..agentic_tokens import register_agentic_tokens
+
+        tokenizer = getattr(self._processor, 'tokenizer', None)
+        if tokenizer is None:
+            return
+
+        added = register_agentic_tokens(tokenizer)
+        if added > 0:
+            self._model.resize_token_embeddings(len(tokenizer))
+            logger.info("Resized embeddings for %d agentic tokens", added)
 
     def _get_extra_model_info(self) -> Dict[str, Any]:
         """添加 Florence-2 特有的模型信息"""

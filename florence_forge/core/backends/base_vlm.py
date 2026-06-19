@@ -11,30 +11,32 @@ import logging
 import warnings
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, ClassVar, Dict, List, Optional, Protocol, Type, Union
+from typing import Any, ClassVar, Dict, List, Optional, Type, Union
 
 import torch
 import torch.nn as nn
 
+from ..config import WarnOnUnknownFieldsModel, Field
+
 logger = logging.getLogger(__name__)
 
 
-class BackendConfig(Protocol):
-    """结构化描述 VLM 后端实际消费的配置字段。
+class BackendConfig(WarnOnUnknownFieldsModel):
+    """VLM 后端配置基类（Pydantic v2 BaseModel）。
 
-    后端仍然通过 ``getattr`` 保持向后兼容；该 Protocol 主要服务于静态分析、
-    IDE 补全和第三方后端实现者的类型契约。
+    替代原有的 Protocol，提供运行时校验能力。
+    后端实现者可继承此类定义自己的配置字段。
     """
 
-    model_name: str
-    revision: Optional[str]
-    trust_remote_code: bool
-    torch_dtype: str
-    device: str
-    device_map: str
-    attn_implementation: Optional[str]
-    use_fp16: bool
-    use_bf16: bool
+    model_name: str = Field(default="microsoft/Florence-2-large", description="HuggingFace 模型标识符")
+    revision: Optional[str] = Field(default=None, description="模型版本")
+    trust_remote_code: bool = Field(default=True, description="是否信任远程代码")
+    torch_dtype: str = Field(default="auto", description="权重数据类型")
+    device: str = Field(default="auto", description="目标设备")
+    device_map: str = Field(default="auto", description="设备映射策略")
+    attn_implementation: Optional[str] = Field(default=None, description="注意力实现")
+    use_fp16: bool = Field(default=False, description="是否使用 FP16")
+    use_bf16: bool = Field(default=False, description="是否使用 BF16")
 
 
 def _check_flash_attn_availability() -> bool:
@@ -94,6 +96,10 @@ class BaseVLMBackend(ABC, nn.Module):
 
     ARCHITECTURE_TYPE: str = "encoder_decoder"
     BACKEND_NAME: str = "base"
+
+    # 子类可覆盖此字典，为 generate() 提供后端特定的默认参数。
+    # 例如 Florence-2 需要 use_cache=False。
+    GENERATE_DEFAULTS: ClassVar[Dict[str, Any]] = {}
 
     _backends: ClassVar[Dict[str, Type["BaseVLMBackend"]]] = {}
 
@@ -159,6 +165,10 @@ class BaseVLMBackend(ABC, nn.Module):
             self.load_model()
         if self._processor is None:
             self.load_processor()
+        # Allow subclasses to register special tokens after load.
+        hook = getattr(self, "_post_load_setup", None)
+        if callable(hook):
+            hook()
         return self
 
     def _get_optimal_device(self) -> str:
@@ -295,8 +305,9 @@ class BaseVLMBackend(ABC, nn.Module):
         input_ids = input_ids.to(self.device)
         pixel_values = pixel_values.to(self.device)
         generate_kwargs = dict(kwargs)
-        if self.BACKEND_NAME == "florence-2":
-            generate_kwargs.setdefault("use_cache", False)
+        # 应用后端特定的 generate 默认参数（如 Florence-2 的 use_cache=False）
+        for key, value in self.GENERATE_DEFAULTS.items():
+            generate_kwargs.setdefault(key, value)
         if attention_mask is not None:
             attention_mask = attention_mask.to(self.device)
             generate_kwargs["attention_mask"] = attention_mask
@@ -434,12 +445,28 @@ class VLMBackendRegistry:
 
     _backends: ClassVar[Dict[str, Type["BaseVLMBackend"]]] = {}
 
+    # 集中别名映射：别名 → 规范名
+    _ALIASES: ClassVar[Dict[str, str]] = {
+        "florence2": "florence-2",
+        "youtu-vl": "youtuvl",
+        "tencent-youtuvl": "youtuvl",
+        "auto": "generic-hf",
+        "hf": "generic-hf",
+        "paligemma-3b": "paligemma",
+    }
+
     @staticmethod
     def _normalize_name(name: str) -> str:
         key = name.strip().lower()
         if not key:
             raise ValueError("后端名称不能为空")
         return key
+
+    @classmethod
+    def _resolve_name(cls, name: str) -> str:
+        """将名称（含别名）解析为规范注册名。"""
+        key = cls._normalize_name(name)
+        return cls._ALIASES.get(key, key)
 
     @classmethod
     def register(cls, name: str, backend_class: Type["BaseVLMBackend"]) -> None:
@@ -450,7 +477,7 @@ class VLMBackendRegistry:
     @classmethod
     def get_backend_class(cls, name: str) -> Type["BaseVLMBackend"]:
         """返回已注册后端类，作为解析器等模块的公共查询 API。"""
-        key = cls._normalize_name(name)
+        key = cls._resolve_name(name)
         if key not in cls._backends:
             available = ", ".join(cls.list_backends())
             raise ValueError(f"未知后端: {key}。可用后端: {available}")
@@ -466,7 +493,12 @@ class VLMBackendRegistry:
 
     @classmethod
     def is_registered(cls, name: str) -> bool:
-        return cls._normalize_name(name) in cls._backends
+        return cls._resolve_name(name) in cls._backends
+
+    @classmethod
+    def list_aliases(cls) -> Dict[str, str]:
+        """返回所有别名映射（别名 → 规范名）。"""
+        return dict(cls._ALIASES)
 
 
 _registry = VLMBackendRegistry()
