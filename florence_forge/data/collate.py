@@ -55,6 +55,9 @@ class Florence2Collator:
             "pixel_values",
             "labels",
             "loss_weights",
+            "reference_ids",
+            "prompt_input_ids",
+            "prompt_attention_mask",
             "token_type_ids",
             "position_ids",
             "mm_token_type_ids",
@@ -81,6 +84,14 @@ class Florence2Collator:
         if all(sample.get("attention_mask") is not None for sample in batch):
             attention_mask_list = [sample["attention_mask"] for sample in batch]
             collated["attention_mask"] = self._pad_sequence(attention_mask_list, pad_value=0)
+
+        if all(sample.get("prompt_input_ids") is not None for sample in batch):
+            prompt_input_ids_list = [sample["prompt_input_ids"] for sample in batch]
+            collated["prompt_input_ids"] = self._pad_sequence(prompt_input_ids_list)
+
+        if all(sample.get("prompt_attention_mask") is not None for sample in batch):
+            prompt_attention_mask_list = [sample["prompt_attention_mask"] for sample in batch]
+            collated["prompt_attention_mask"] = self._pad_sequence(prompt_attention_mask_list, pad_value=0)
 
         # ---- 3. 处理 labels（动态 padding，pad_value=-100） ----
         if all(sample.get("labels") is not None for sample in batch):
@@ -121,7 +132,11 @@ class Florence2Collator:
                     weights_list.append(lw_tensor)
             collated["loss_weights"] = self._pad_sequence(weights_list, pad_value=0)
 
-        # ---- 5. Handle optional sequence tensors (PaliGemma etc.) ----
+        if all(sample.get("reference_ids") is not None for sample in batch):
+            reference_ids_list = [sample["reference_ids"] for sample in batch]
+            collated["reference_ids"] = self._pad_sequence(reference_ids_list)
+
+        # ---- 5. 处理可选序列张量（PaliGemma 等 decoder-only VLM 可能返回） ----
         for key in ("token_type_ids", "position_ids", "mm_token_type_ids"):
             if all(sample.get(key) is not None for sample in batch):
                 tensor_list = [sample[key] for sample in batch]

@@ -77,7 +77,15 @@ def _build_eval_dataset_from_jsonl(data_path: str, model) -> "MultiTaskDataset":
         data_configs.append({"task_type": task_type, "data_path": str(task_file)})
         logger.info(f"   任务 {task_type}: {len(lines)} 个样本")
 
-    dataset = MultiTaskDataset(data_configs, processor=model.processor)
+    # 评估阶段优先复用模型 backend。
+    # 对 Florence 原生 OD 等任务，backend.encode_with_task() 会正确处理
+    # “task token + answer token” 的拼接；仅传 processor 会退回到旧的
+    # prompt+answer 直接拼接路径，并触发 processing_florence2 的断言。
+    dataset = MultiTaskDataset(
+        data_configs,
+        processor=model.processor,
+        backend=getattr(model, "_backend", None),
+    )
     dataset._eval_temp_dir = str(temp_dir)  # type: ignore[attr-defined]
     return dataset
 

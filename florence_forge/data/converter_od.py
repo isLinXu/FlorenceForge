@@ -8,6 +8,7 @@ from pathlib import Path
 
 from PIL import Image
 from tqdm import tqdm
+from ..core.visual_primitives import normalize_bbox
 
 try:
     from defusedxml import ElementTree as ET
@@ -15,6 +16,15 @@ except ImportError:  # pragma: no cover
     ET = None
 
 logger = logging.getLogger(__name__)
+
+
+def _format_florence_od_suffix(labels, bboxes) -> str:
+    """格式化为 Florence 原生 ``label<loc_*>`` 检测标注。"""
+    parts = []
+    for label, bbox in zip(labels, bboxes):
+        coords = "".join(f"<loc_{int(coord)}>" for coord in bbox)
+        parts.append(f"{label}{coords}")
+    return "".join(parts)
 
 
 def yolo_to_florence2_od(yolo_labels_dir: str, output_path: str, 
@@ -79,28 +89,27 @@ def yolo_to_florence2_od(yolo_labels_dir: str, output_path: str,
                         width = float(parts[3])
                         height = float(parts[4])
                         
-                        # 转换为绝对坐标
+                        # 归一化到 Florence 原生 0-1000 坐标系
                         x1 = (x_center - width / 2) * img_width
                         y1 = (y_center - height / 2) * img_height
                         x2 = (x_center + width / 2) * img_width
                         y2 = (y_center + height / 2) * img_height
-                        
-                        bboxes.append([x1, y1, x2, y2])
+
+                        bboxes.append(
+                            normalize_bbox(
+                                [x1, y1, x2, y2],
+                                (img_width, img_height),
+                                input_format="xyxy",
+                            )
+                        )
                         labels.append(classes[class_id])
             
             if bboxes:  # 只处理有标注的图像
-                answer = {
-                    f'<{task_type}>': {
-                        'bboxes': bboxes,
-                        'labels': labels
-                    }
-                }
-                
                 sample = {
                     'image': str(image_file.absolute()),
                     'label_file': str(label_file.absolute()),
                     'prefix': f'<{task_type}>',
-                    'suffix': json.dumps(answer, ensure_ascii=False)
+                    'suffix': _format_florence_od_suffix(labels, bboxes),
                 }
                 
                 f.write(json.dumps(sample, ensure_ascii=False) + '\n')
@@ -150,22 +159,14 @@ def coco_to_florence2_od(coco_json_path: str, output_path: str,
             
             bboxes = []
             labels = []
+            image_size = (int(image_info["width"]), int(image_info["height"]))
             for ann in annotations:
                 bbox = ann['bbox']  # [x, y, width, height]
-                # 转换为[x1, y1, x2, y2]格式
-                x1, y1, w, h = bbox
-                x2, y2 = x1 + w, y1 + h
-                bboxes.append([x1, y1, x2, y2])
+                bboxes.append(
+                    normalize_bbox(bbox, image_size, input_format="xywh")
+                )
                 labels.append(categories[ann['category_id']])
-            
-            # 构建答案
-            answer = {
-                f'<{task_type}>': {
-                    'bboxes': bboxes,
-                    'labels': labels
-                }
-            }
-            
+
             # 使用绝对路径
             image_path = image_dir / image_info['file_name']
             
@@ -173,7 +174,7 @@ def coco_to_florence2_od(coco_json_path: str, output_path: str,
             sample = {
                 'image': str(image_path.absolute()),
                 'prefix': f'<{task_type}>',
-                'suffix': json.dumps(answer, ensure_ascii=False)
+                'suffix': _format_florence_od_suffix(labels, bboxes),
             }
             
             f.write(json.dumps(sample, ensure_ascii=False) + '\n')
@@ -213,6 +214,15 @@ def xml_to_florence2_od(xml_dir: str, output_path: str,
             
             # 获取图像信息
             filename = root.find('filename').text
+            size_node = root.find('size')
+            if size_node is not None:
+                img_width = int(size_node.find('width').text)
+                img_height = int(size_node.find('height').text)
+                image_size = (img_width, img_height)
+            else:
+                image_path = image_dir / filename
+                with Image.open(image_path) as img:
+                    image_size = img.size
             
             # 获取所有目标
             bboxes = []
@@ -226,17 +236,16 @@ def xml_to_florence2_od(xml_dir: str, output_path: str,
                 xmax = int(bbox.find('xmax').text)
                 ymax = int(bbox.find('ymax').text)
                 
-                bboxes.append([xmin, ymin, xmax, ymax])
+                bboxes.append(
+                    normalize_bbox(
+                        [xmin, ymin, xmax, ymax],
+                        image_size,
+                        input_format="xyxy",
+                    )
+                )
                 labels.append(label)
             
             if bboxes:  # 只处理有标注的图像
-                answer = {
-                    f'<{task_type}>': {
-                        'bboxes': bboxes,
-                        'labels': labels
-                    }
-                }
-                
                 # 使用绝对路径
                 image_path = image_dir / filename
                 
@@ -244,7 +253,7 @@ def xml_to_florence2_od(xml_dir: str, output_path: str,
                     'image': str(image_path.absolute()),
                     'xml_file': str(xml_file.absolute()),
                     'prefix': f'<{task_type}>',
-                    'suffix': json.dumps(answer, ensure_ascii=False)
+                    'suffix': _format_florence_od_suffix(labels, bboxes),
                 }
                 
                 f.write(json.dumps(sample, ensure_ascii=False) + '\n')
