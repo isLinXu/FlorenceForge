@@ -51,14 +51,30 @@ class MultiTaskEvaluator:
                 f"但 {type(model).__name__} 未提供"
             )
 
-        # 将模型移到指定设备
-        self.model.to(self.device)
+        # 将模型移到指定设备。对于 accelerate device_map/offload 的模型，
+        # 再次调用 .to(...) 会直接报错，此时保留其当前分发状态即可。
+        if self._can_move_model(model):
+            self.model.to(self.device)
+        else:
+            logger.info("检测到 accelerate 分发/卸载模型，跳过显式 model.to(device)")
 
         # 评估结果存储
         self.evaluation_results = {}
         self.task_metrics = {}
 
         logger.info(f"多任务评估器初始化完成，使用设备: {self.device}")
+
+    def _can_move_model(self, model: nn.Module) -> bool:
+        """判断模型是否适合显式调用 ``.to(device)``。"""
+        inner_model = self._safe_getattr(model, "model", None)
+        candidates = [m for m in (model, inner_model) if m is not None]
+        for candidate in candidates:
+            hf_device_map = self._safe_getattr(candidate, "hf_device_map", None)
+            if hf_device_map:
+                return False
+            if self._safe_getattr(candidate, "_hf_hook", None) is not None:
+                return False
+        return True
 
     def _safe_getattr(self, obj: Any, name: str, default: Any = None) -> Any:
         """安全获取属性，避免未加载 processor 等 RuntimeError 打断接口检测。"""
@@ -83,6 +99,40 @@ class MultiTaskEvaluator:
 
         raise RuntimeError("模型未提供 decode() 或 processor.batch_decode()，无法解码评估结果")
 
+    def _should_preserve_special_tokens(self, task_type: str) -> bool:
+        """检测/区域类任务需要保留 ``<loc_*>`` 等特殊 token 才能正确评估。"""
+        if not isinstance(task_type, str):
+            return False
+        task_upper = task_type.upper()
+        return task_upper in {
+            "OD",
+            "OD_VP",
+            "REGION_PROPOSAL",
+            "CAPTION_TO_PHRASE_GROUNDING",
+            "PHRASE_GROUNDING_VP",
+        }
+
+    def _decode_by_task_types(
+        self,
+        token_ids: torch.Tensor,
+        task_types: List[str],
+    ) -> List[str]:
+        """按任务逐样本解码，确保 OD 等任务保留 loc tokens。"""
+        if not isinstance(token_ids, torch.Tensor):
+            return []
+        if token_ids.dim() == 1:
+            token_ids = token_ids.unsqueeze(0)
+        decoded: List[str] = []
+        for index, task_type in enumerate(task_types):
+            sample_ids = token_ids[index].unsqueeze(0)
+            decoded.extend(
+                self._decode_token_ids(
+                    sample_ids,
+                    skip_special_tokens=not self._should_preserve_special_tokens(task_type),
+                )
+            )
+        return decoded
+
     def _get_batch_task_types(self, batch: Dict[str, Any]) -> List[str]:
         """返回与 batch size 对齐的任务类型列表。"""
         task_types = batch.get('task_types')
@@ -99,14 +149,28 @@ class MultiTaskEvaluator:
 
     def _get_reference_ids(self, batch: Dict[str, Any]) -> Optional[torch.Tensor]:
         """获取参考答案 token，避免在 Tensor 上使用布尔 or。"""
-        reference_ids = batch.get('labels')
+        reference_ids = batch.get('reference_ids')
         if reference_ids is None:
-            reference_ids = batch.get('reference_ids')
+            reference_ids = batch.get('labels')
         if isinstance(reference_ids, torch.Tensor):
             pad_token_id = self._resolve_pad_token_id()
             reference_ids = reference_ids.clone()
             reference_ids[reference_ids == -100] = pad_token_id
         return reference_ids
+
+    def _get_generation_inputs(self, batch: Dict[str, Any]) -> Dict[str, torch.Tensor]:
+        """评估生成优先使用仅 prompt 输入，避免把 reference token 一起喂给模型。"""
+        input_ids = batch.get("prompt_input_ids")
+        attention_mask = batch.get("prompt_attention_mask")
+        if input_ids is None:
+            input_ids = batch["input_ids"]
+        if attention_mask is None:
+            attention_mask = batch.get("attention_mask")
+        return {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            "pixel_values": batch["pixel_values"],
+        }
 
     def _resolve_pad_token_id(self) -> int:
         """解析模型 processor/tokenizer 的 pad_token_id，找不到时回退 0。"""
@@ -265,17 +329,18 @@ class MultiTaskEvaluator:
                 batch_task_types = self._get_batch_task_types(batch)
                 
                 # 生成预测
+                generation_inputs = self._get_generation_inputs(batch)
                 predictions = self.model.generate(
-                    input_ids=batch['input_ids'],
-                    pixel_values=batch['pixel_values'],
-                    attention_mask=batch.get('attention_mask'),
+                    input_ids=generation_inputs['input_ids'],
+                    pixel_values=generation_inputs['pixel_values'],
+                    attention_mask=generation_inputs.get('attention_mask'),
                     max_new_tokens=512,
                     do_sample=False
                 )
                 
                 # 解码预测结果：仅在生成结果确实包含 prompt 前缀时剥离
-                new_tokens = self._extract_generated_tokens(predictions, batch['input_ids'])
-                decoded_predictions = self._decode_token_ids(new_tokens, skip_special_tokens=True)
+                new_tokens = self._extract_generated_tokens(predictions, generation_inputs['input_ids'])
+                decoded_predictions = self._decode_by_task_types(new_tokens, batch_task_types)
                 
                 # 解码参考答案
                 # 优先使用 labels（包含 answer 部分的 token），其次使用专门存储的 reference_ids
@@ -284,7 +349,7 @@ class MultiTaskEvaluator:
                     # 如果没有参考答案，无法计算指标，跳过该批次
                     logger.warning("批次缺少 labels/reference_ids，跳过指标计算")
                     continue
-                decoded_references = self._decode_token_ids(reference_ids, skip_special_tokens=True)
+                decoded_references = self._decode_by_task_types(reference_ids, batch_task_types)
                 
                 # 按任务类型组织结果
                 for i, (pred, ref, task_type) in enumerate(
@@ -406,23 +471,25 @@ class MultiTaskEvaluator:
                         for k, v in batch.items()}
                 
                 # 生成预测
+                generation_inputs = self._get_generation_inputs(batch)
                 pred_ids = self.model.generate(
-                    input_ids=batch['input_ids'],
-                    pixel_values=batch['pixel_values'],
-                    attention_mask=batch.get('attention_mask'),
+                    input_ids=generation_inputs['input_ids'],
+                    pixel_values=generation_inputs['pixel_values'],
+                    attention_mask=generation_inputs.get('attention_mask'),
                     max_new_tokens=512,
                     do_sample=False
                 )
                 
                 # 解码结果：仅在生成结果确实包含 prompt 前缀时剥离
-                new_tokens = self._extract_generated_tokens(pred_ids, batch['input_ids'])
-                batch_predictions = self._decode_token_ids(new_tokens, skip_special_tokens=True)
+                new_tokens = self._extract_generated_tokens(pred_ids, generation_inputs['input_ids'])
+                batch_task_types = self._get_batch_task_types(batch)
+                batch_predictions = self._decode_by_task_types(new_tokens, batch_task_types)
                 
                 reference_ids = self._get_reference_ids(batch)
                 if reference_ids is None:
                     logger.warning("批次缺少 labels/reference_ids，跳过指标计算")
                     continue
-                batch_references = self._decode_token_ids(reference_ids, skip_special_tokens=True)
+                batch_references = self._decode_by_task_types(reference_ids, batch_task_types)
                 
                 # 清理和收集结果
                 for pred, ref in zip(batch_predictions, batch_references):

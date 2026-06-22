@@ -99,6 +99,16 @@ def raw_image_result(
     }
 
 
+def _extract_reference_ids_from_labels(labels: torch.Tensor) -> torch.Tensor:
+    """从带 ``-100`` mask 的 labels 中提取可解码的参考答案 token。"""
+    if labels.dim() > 1:
+        labels = labels.squeeze(0)
+    reference_ids = labels[labels != -100]
+    if reference_ids.numel() == 0:
+        return labels.new_empty((0,), dtype=labels.dtype)
+    return reference_ids.clone()
+
+
 def _encode_via_backend(
     *,
     backend: Any,
@@ -140,12 +150,22 @@ def _encode_via_backend(
             "input_ids": full_processed["input_ids"],
             "pixel_values": full_processed["pixel_values"],
             "labels": labels,
+            "reference_ids": _extract_reference_ids_from_labels(labels),
             "prompt": prompt,
             "answer": answer,
             "task_type": sample.task_type,
             "weight": sample.weight,
             "metadata": sample.metadata,
         }
+        prompt_lengths = full_processed.get("prompt_lengths")
+        if isinstance(prompt_lengths, torch.Tensor):
+            if prompt_lengths.dim() > 0:
+                prompt_length = int(prompt_lengths.reshape(-1)[0].item())
+            else:
+                prompt_length = int(prompt_lengths.item())
+            result["prompt_input_ids"] = full_processed["input_ids"][:prompt_length].clone()
+            if "attention_mask" in full_processed:
+                result["prompt_attention_mask"] = full_processed["attention_mask"][:prompt_length].clone()
         if "attention_mask" in full_processed:
             result["attention_mask"] = full_processed["attention_mask"]
         for extra_key in ("token_type_ids", "position_ids", "mm_token_type_ids"):
@@ -221,6 +241,9 @@ def _encode_via_processor(
         "attention_mask": full_processed["attention_mask"],
         "pixel_values": full_processed["pixel_values"],
         "labels": labels,
+        "reference_ids": _extract_reference_ids_from_labels(labels),
+        "prompt_input_ids": prompt_input_ids.clone(),
+        "prompt_attention_mask": prompt_processed.get("attention_mask"),
         "prompt": prompt,
         "answer": answer,
         "task_type": sample.task_type,

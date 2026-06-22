@@ -298,9 +298,27 @@ class DetectionMetrics(MetricCalculator):
         detections = []
 
         try:
+            from .structured_vp_decoder import (
+                FlorenceNativeDetectionParser,
+                StructuredVisualPrimitiveDecoder,
+            )
+
+            text = str(result or "").strip()
+            if not text:
+                return detections
+
+            # 优先使用 Florence 原生 / 结构化 VP 解析器，支持多词标签和 loc token。
+            native_detections = FlorenceNativeDetectionParser().parse(text)
+            if native_detections:
+                return native_detections
+
+            structured = StructuredVisualPrimitiveDecoder().decode(text)
+            if structured.detections:
+                return structured.detections
+
             # 尝试解析JSON格式
-            if result.strip().startswith('[') or result.strip().startswith('{'):
-                data = json.loads(result)
+            if text.startswith('[') or text.startswith('{'):
+                data = json.loads(text)
                 if isinstance(data, list):
                     detections = data
                 elif isinstance(data, dict) and 'objects' in data:
@@ -309,7 +327,7 @@ class DetectionMetrics(MetricCalculator):
 
             # VP 格式: <|ref|>label<|/ref|><|box|>[[x1,y1,x2,y2],...]<|/box|>
             vp_pattern = r'<\|?ref\|?>([^<]+)<\|?/ref\|?>\s*<\|?box\|?>\s*\[\[([^\]]*)\]\]\s*<\|?/box\|?>'
-            vp_matches = re.findall(vp_pattern, result)
+            vp_matches = re.findall(vp_pattern, text)
             if vp_matches:
                 for label, coords_str in vp_matches:
                     coords = [float(x.strip()) for x in coords_str.split(',')]
@@ -321,13 +339,13 @@ class DetectionMetrics(MetricCalculator):
                 return detections
 
             # VP loc token 格式: label<loc_x><loc_y><loc_x2><loc_y2>
-            pattern = r'(\w+)<loc_(\d+)><loc_(\d+)><loc_(\d+)><loc_(\d+)>'
-            matches = re.findall(pattern, result)
+            pattern = r'([^<]+?)<loc_(\d+)><loc_(\d+)><loc_(\d+)><loc_(\d+)>'
+            matches = re.findall(pattern, text)
 
             for match in matches:
                 label, x1, y1, x2, y2 = match
                 detections.append({
-                    'label': label,
+                    'label': label.strip(),
                     'bbox': [int(x1), int(y1), int(x2), int(y2)],
                     'confidence': 1.0  # 默认置信度
                 })
