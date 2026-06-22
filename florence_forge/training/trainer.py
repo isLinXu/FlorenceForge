@@ -192,9 +192,15 @@ class MultiTaskTrainer:
         self._setup_optimizer()
         self._setup_lr_scheduler()
 
+        model_config = getattr(self.config, "model_config", {})
+        if isinstance(model_config, dict):
+            lora_config = model_config.get("lora_config")
+        else:
+            lora_config = getattr(model_config, "lora_config", None)
+
         if self.config.use_lora and not getattr(self.model, "is_peft_model", False):
             task_types = list(getattr(self.train_dataset, "task_indices", {}).keys())
-            self.lora_manager = LoRAManager(self.config.lora_config)
+            self.lora_manager = LoRAManager(lora_config)
             self.model_merger = ModelMerger(self.lora_manager)
             if task_types:
                 first_task = task_types[0]
@@ -204,7 +210,9 @@ class MultiTaskTrainer:
                 if hasattr(self.lora_manager, "print_trainable_parameters"):
                     self.lora_manager.print_trainable_parameters(self.model)
         elif self.config.use_lora:
-            logger.warning("use_lora=True 但模型未标记为 PEFT")
+            self.lora_manager = LoRAManager(lora_config)
+            self.model_merger = ModelMerger(self.lora_manager)
+            logger.info("检测到模型已在加载阶段注入 LoRA，复用现有 PEFT 模型")
 
         if getattr(self.config, "use_task_scheduler", False):
             task_types = list(getattr(self.train_dataset, "task_indices", {}).keys())

@@ -382,7 +382,7 @@ class CheckpointManager:
         final_dir.mkdir(parents=True, exist_ok=True)
         
         # 合并 LoRA 权重（如果需要）
-        if merge_lora and lora_manager is not None:
+        if merge_lora:
             logger.info("合并 LoRA 权重...")
             from .model_merger import ModelMerger
 
@@ -390,20 +390,27 @@ class CheckpointManager:
             model_to_merge = self.model
             if self.accelerator is not None:
                 model_to_merge = self.accelerator.unwrap_model(self.model)
-            model_to_save = merger.merge_all_adapters(model_to_merge)
+            if lora_manager is not None:
+                model_to_save = merger.merge_all_adapters(model_to_merge)
+            else:
+                model_to_save = merger.merge_and_unload(model_to_merge)
         else:
             model_to_save = self.model
         
-        # 保存模型
+        # 保存模型。对 accelerate 包装场景，必须优先 unwrap 后调用 save_pretrained，
+        # 否则会把外层包装器的 state_dict 前缀一并写进 safetensors。
         if self.accelerator is not None:
+            model_to_save = self.accelerator.unwrap_model(model_to_save)
+
+        if hasattr(model_to_save, 'module'):
+            model_to_save = model_to_save.module
+
+        if hasattr(model_to_save, 'save_pretrained'):
+            model_to_save.save_pretrained(final_dir)
+        elif self.accelerator is not None:
             self.accelerator.save_model(model_to_save, final_dir)
         else:
-            # 获取原始模型（unwrap DataParallel）
-            if hasattr(model_to_save, 'module'):
-                model_to_save = model_to_save.module
-            
-            # 保存模型状态
-            model_to_save.save_pretrained(final_dir)
+            raise RuntimeError("最终模型对象不支持 save_pretrained，且没有可用 accelerator.save_model 回退路径")
         
         logger.info(f"💾 最终模型已保存：{final_dir}")
     

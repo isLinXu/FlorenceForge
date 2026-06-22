@@ -683,6 +683,11 @@ class ModelMerger:
             合并后的模型
         """
         try:
+            from ..core.model import Florence2MultiTaskModel as _Wrapper
+
+            if isinstance(peft_model, _Wrapper):
+                peft_model = peft_model.model
+
             # 获取所有适配器名称
             adapter_names = list(peft_model.peft_config.keys())
             
@@ -692,7 +697,7 @@ class ModelMerger:
             
             # 如果只有一个适配器，直接合并
             if len(adapter_names) == 1:
-                return peft_model.merge_and_unload()
+                return self.merge_and_unload(peft_model)
             
             # 多适配器合并
             if adapter_weights is None:
