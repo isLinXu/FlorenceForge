@@ -1,0 +1,90 @@
+# COCO128 OD best-effort rerun config
+num_epochs: 8
+max_steps: null
+eval_steps: 50
+save_steps: 100
+logging_steps: 10
+
+tasks:
+  - "OD"
+task_weights:
+  OD: 1.0
+train_data_path: "./data/coco128_yolo_od_train.jsonl"
+val_data_path: "./data/coco128_yolo_od_val.jsonl"
+
+# device: "cpu"
+device: "cuda"
+
+
+use_fp16: false
+use_bf16: false
+
+gradient_accumulation_steps: 4
+gradient_clipping:
+  max_norm: 1.0
+
+early_stopping:
+  enabled: true
+  patience: 3
+  metric: "val_loss"
+  mode: "min"
+
+output_dir: "./outputs/coco128_od_best_rerun"
+logging_dir: "./outputs/coco128_od_best_rerun/logs"
+run_name: "coco128_od_best_rerun"
+tags:
+  - "florence2"
+  - "object-detection"
+  - "coco128"
+  - "validation"
+  - "best-rerun"
+
+model_config:
+  model_name: "/home/linxu/PycharmProjects/AI-ModelScope/Florence-2-base"
+  trust_remote_code: true
+  torch_dtype: "float32"
+  device_map: "none"
+  device: "cpu"
+  use_lora: true
+  lora_config:
+    r: 16
+    lora_alpha: 32
+    target_modules:
+      - "q_proj"
+      - "k_proj"
+      - "v_proj"
+      - "out_proj"
+    lora_dropout: 0.1
+    bias: "none"
+    task_type: "CAUSAL_LM"
+
+optimizer_config:
+  type: "adamw"
+  learning_rate: 1.0e-5
+  weight_decay: 0.01
+  adam_beta1: 0.9
+  adam_beta2: 0.999
+  adam_epsilon: 1.0e-8
+
+scheduler_config:
+  type: "cosine"
+  warmup_steps: 10
+
+data_config:
+  batch_size: 2
+  num_workers: 0
+  pin_memory: false
+  shuffle: true
+  drop_last: false
+  use_augmentation: false
+
+monitoring:
+  track_gpu_memory: false
+  track_gradient_norm: true
+  log_predictions: false
+
+checkpointing:
+  save_total_limit: 3
+  load_best_model_at_end: true
+  metric_for_best_model: "val_loss"
+  greater_is_better: false
