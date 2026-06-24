@@ -7,11 +7,9 @@ _compile_model）已在 BaseVLMBackend 中实现，此文件仅保留 YouTu-VL �
 模型加载、任务映射和输出解析逻辑。
 """
 
-import os
 import re
-import torch
 import logging
-from typing import Optional, Dict, Any, List, Union
+from typing import Optional, Dict, Any, List
 from pathlib import Path
 
 try:
@@ -71,7 +69,7 @@ class YouTuVLBackend(BaseVLMBackend):
         custom_tasks = getattr(config, "supported_tasks", None)
         self._supports_tasks = list(custom_tasks or self._task_prompts.keys())
 
-        logger.info(f"YouTuVLBackend 已初始化（模型未加载，请调用 backend.load()）")
+        logger.info("YouTuVLBackend 已初始化（模型未加载，请调用 backend.load()）")
 
     # ------------------------------------------------------------------
     # 1. 模型加载（YouTu-VL 特有逻辑）

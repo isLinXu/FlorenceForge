@@ -40,6 +40,10 @@ from .commands_train import (
     run_training_task,
     run_tvp_training_task,
 )
+from .commands_agentic import (
+    InferenceEngineAdapter,
+    run_agentic_task,
+)
 
 __all__ = [
     "_apply_config_overrides",
@@ -55,6 +59,8 @@ __all__ = [
     "_run_vp_yolo_conversion",
     "_select_trainer_class",
     "_set_nested_attr",
+    "InferenceEngineAdapter",
+    "run_agentic_task",
     "run_data_conversion",
     "run_eval_task",
     "run_inference_task",

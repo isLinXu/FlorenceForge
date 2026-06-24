@@ -10,7 +10,7 @@ import threading
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Deque, Dict, List, Optional, Tuple, Any
+from typing import Deque, Dict, List, Optional, Any
 import json
 
 from ..utils.training_logging import format_memory_snapshot

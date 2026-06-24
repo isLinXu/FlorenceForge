@@ -8,11 +8,9 @@ get_model_info, _compile_model）已在 BaseVLMBackend 中实现，此文件仅�
 Florence-2 特有的模型加载和任务映射逻辑。
 """
 
-import os
 import torch
 import logging
-from typing import Optional, Dict, Any, List, Union
-from pathlib import Path
+from typing import Optional, Dict, Any, List
 
 try:
     from transformers import AutoProcessor, AutoModelForCausalLM

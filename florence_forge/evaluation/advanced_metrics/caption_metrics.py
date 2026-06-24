@@ -1,7 +1,6 @@
 """图像描述评估指标"""
 
-import re
-from typing import List, Dict
+from typing import List
 from collections import Counter
 import math
 

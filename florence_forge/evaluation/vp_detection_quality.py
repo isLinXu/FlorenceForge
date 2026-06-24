@@ -4,49 +4,36 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
 from .structured_vp_decoder import labels_match
 from .vp_parsing import (
-    allowed_label_field_candidates,
     bad_case_reasons,
     box_count_bucket,
     is_box,
-    normalize_label,
     parse_prediction,
-    quality_record_key,
-    record_field_value,
     record_query_box_count,
     record_text,
     resolve_record_allowed_labels,
-    resolve_record_positive_int_field,
-    summary_records,
 )
 from .vp_aggregation import (
     aggregate_counts,
     compare_quality_record,
-    int_record_metric,
     mean,
     quality_report_brief,
     ratio,
     safe_policy_label,
     summarize_box_count_buckets,
-    summarize_bucket_records,
     summarize_quality_record_comparison,
     summarize_quality_record_comparison_buckets,
     summarize_target_count_gap_buckets,
-    summarize_target_count_gap_rows,
     target_count_gap_row,
     top_record_deltas,
 )
 from ._vp_helpers import (
-    _allowed_labels_from_config,
     _coerce_named_reports,
-    _focus_bucket_metrics,
-    _infer_policy_kind,
     _metric_gap,
     _normalize_focus_bucket,
-    _policy_constraints_and_caveats,
     _policy_rank_key,
     _quality_report_to_comparison_row,
     _row_metric,
@@ -922,3 +909,22 @@ def render_vp_target_count_gap_markdown(analysis: Mapping[str, Any]) -> str:
             )
 
     return "\n".join(lines) + "\n"
+
+
+__all__ = [
+    "VPDetectionQualityConfig",
+    "evaluate_vp_detection_quality",
+    "evaluate_vp_summary",
+    "load_vp_quality_summary",
+    "match_vp_detections",
+    "summarize_vp_quality_records",
+    "compute_bbox_iou",
+    "render_vp_detection_quality_markdown",
+    "compare_vp_quality_reports",
+    "compare_vp_quality_record_reports",
+    "recommend_vp_policy",
+    "render_vp_policy_comparison_markdown",
+    "render_vp_record_comparison_markdown",
+    "analyze_vp_target_count_gap",
+    "render_vp_target_count_gap_markdown",
+]

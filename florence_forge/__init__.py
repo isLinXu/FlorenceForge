@@ -124,7 +124,7 @@ def print_info():
     print(f"\n{'='*60}")
     print(f"FlorenceForge v{__version__}")
     print(f"{'='*60}")
-    print(f"描述: Florence-2多任务微调库")
+    print("描述: Florence-2多任务微调库")
     print(f"作者: {__author__}")
     print(f"邮箱: {__email__}")
     print(f"许可: {__license__}")

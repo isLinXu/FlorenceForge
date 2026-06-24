@@ -23,13 +23,12 @@ scale the cross-entropy loss per token.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 import torch
 
 from ..core.agentic_tokens import (
     AGENTIC_PHASE_TOKENS,
-    AGENTIC_SPECIAL_TOKENS,
     PHASE_LOSS_WEIGHTS,
     find_phase_spans,
 )
@@ -79,7 +78,6 @@ def _char_spans_to_token_spans(
 
     # Fallback: find token IDs that match agentic special tokens
     token_spans_fallback: List[Tuple[str, int, int]] = []
-    phase_stack: List[Tuple[str, int]] = []  # (phase, token_idx_when_opened)
 
     id_to_token = {}
     if hasattr(tokenizer, "convert_ids_to_tokens"):

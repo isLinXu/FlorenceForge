@@ -8,14 +8,12 @@ computation, comparison, and summarization.
 
 from __future__ import annotations
 
-import json
 from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
 
 from .structured_vp_decoder import (
     StructuredVisualPrimitiveDecoder,
-    labels_match,
     resolve_structured_vp_filter_caps,
 )
 from .visual_primitive_parser import VisualPrimitiveParser

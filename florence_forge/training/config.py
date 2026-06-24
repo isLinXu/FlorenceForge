@@ -4,20 +4,13 @@ This module provides configuration validation and management for training proces
 Re-exports core Pydantic config classes and adds training-specific helpers.
 """
 
-import os
-import json
 import logging
-from typing import Optional, List, Dict, Union, Any
+from typing import Union
 from pathlib import Path
 
 # 核心配置类：直接导入，失败即报错（Pydantic v2 已重构）
 from ..core.config import (
-    ModelConfig,
-    DataConfig,
-    OptimizationConfig,
-    TaskSchedulingConfig,
     TrainingConfig,
-    LoRAConfig,
 )
 
 # 监控配置：可选依赖

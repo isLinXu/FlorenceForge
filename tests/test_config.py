@@ -5,7 +5,6 @@
 """
 
 import pytest
-import json
 import tempfile
 from pathlib import Path
 import importlib
@@ -24,7 +23,6 @@ from florence_forge.core.config import (
     ModelConfig,
     DataConfig,
     OptimizationConfig,
-    TaskSchedulingConfig,
     TrainingConfig,
     EvaluationConfig,
     LoRAConfig,

@@ -15,7 +15,6 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import torch
 
 from ._checkpoint_io import atomic_torch_save, prune_checkpoints
 

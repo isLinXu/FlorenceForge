@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+
+if TYPE_CHECKING:  # pragma: no cover - typing-only import
+    import PIL
 
 from florence_forge.utils.plot_backend import finalize_matplotlib_figure
 
@@ -21,7 +24,7 @@ def visualize_detections(self, image, detections: List[Dict[str, Any]], save_pat
             save_path: The path to save the visualization (optional).
         """
         try:
-            from PIL import Image, ImageDraw, ImageFont
+            from PIL import Image
             import matplotlib.pyplot as plt
             import matplotlib.patches as patches
             import numpy as np
@@ -164,7 +167,6 @@ def visualize_caption(self, image, caption: str, save_path: Optional[str] = None
             from PIL import Image, ImageDraw, ImageFont
             import numpy as np
             import textwrap
-            import re
         except ImportError as e:
             logger.error(f"Visualization dependencies are not installed: {e}")
             return

@@ -22,7 +22,10 @@ import json
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Dict, Iterable, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import torch
 
 from florence_forge.utils.diagnostics import DEFAULT_MODEL_ID, find_local_hf_snapshot
 
@@ -110,7 +113,6 @@ def _parameter_delta_norm(
     before: Iterable["torch.Tensor"],
     after: Iterable["torch.nn.Parameter"],
 ) -> float:
-    import torch
 
     total = 0.0
     for before_param, after_param in zip(before, after):

@@ -1,20 +1,18 @@
 """CLI inference helper regressions."""
 
 import json
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from PIL import Image
 
-from florence_forge.cli.main import (
-    create_parser,
+from florence_forge.cli._helpers import (
     _is_supported_image_file,
     _iter_image_files,
     _normalize_inference_stats,
-    run_doctor_task,
-    run_inference_task,
 )
+from florence_forge.cli.commands import run_inference_task
+from florence_forge.cli.main import run_doctor_task
 from florence_forge.cli.commands import _select_trainer_class
 
 

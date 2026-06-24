@@ -12,7 +12,6 @@ from typing import List, Optional, Dict, Any
 from collections import deque, defaultdict
 
 from ..core.config import TaskSchedulingConfig
-from ..core.tasks import FLORENCE2_TASKS
 
 logger = logging.getLogger(__name__)
 

@@ -13,15 +13,15 @@ FlorenceForge 统一 Callback 系统（P1-2 优化）
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-import torch
-import torch.nn as nn
+
+if TYPE_CHECKING:  # pragma: no cover - typing-only import to avoid cycles
+    from ..training.trainer import MultiTaskTrainer
 
 from ..utils.training_logging import (
     format_training_complete,

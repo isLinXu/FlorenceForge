@@ -14,17 +14,13 @@ Covers:
 
 import json
 from pathlib import Path
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
 
 import torch
 import torch.nn as nn
 
 from florence_forge.core.config import (
-    LoRAConfig,
-    ModelConfig,
     TrainingConfig,
-    OptimizationConfig,
-    DataConfig,
 )
 
 
@@ -84,7 +80,7 @@ class TestTorchCompileIntegration:
         mock_torch_compile.return_value = lambda m: m
         from florence_forge.utils.torch_compile import compile_module_if_requested
         model = _DummyModel()
-        result = compile_module_if_requested(model, enabled=True, mode="reduce-overhead")
+        compile_module_if_requested(model, enabled=True, mode="reduce-overhead")
         mock_torch_compile.assert_called_once()
 
     def test_compile_not_called_when_disabled(self):

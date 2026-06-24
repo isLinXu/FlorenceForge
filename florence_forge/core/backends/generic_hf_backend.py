@@ -7,10 +7,9 @@
 已在 BaseVLMBackend 中实现，此文件仅保留 GenericHF 特有的自动检测和加载逻辑。
 """
 
-import os
 import torch
 import logging
-from typing import Optional, Dict, Any, List, Union
+from typing import Dict, Any, List, Union
 from pathlib import Path
 
 try:
@@ -122,7 +121,7 @@ class GenericHFBackend(BaseVLMBackend):
         self._tokenizer = None
         self._image_processor = None
 
-        logger.info(f"GenericHFBackend 已初始化（模型未加载，请调用 backend.load()）")
+        logger.info("GenericHFBackend 已初始化（模型未加载，请调用 backend.load()）")
 
     # ------------------------------------------------------------------
     # 1. 模型加载（GenericHF 特有的自动检测逻辑）
@@ -161,7 +160,7 @@ class GenericHFBackend(BaseVLMBackend):
             try:
                 model = AutoModelForVision2Seq.from_pretrained(model_name, **kwargs)
                 self._architecture_type = "vision2seq"
-                logger.info(f"自动检测: 使用 AutoModelForVision2Seq")
+                logger.info("自动检测: 使用 AutoModelForVision2Seq")
                 return model
             except Exception as e:
                 errors.append(f"Vision2Seq: {e}")
@@ -170,7 +169,7 @@ class GenericHFBackend(BaseVLMBackend):
             try:
                 model = AutoModelForCausalLM.from_pretrained(model_name, **kwargs)
                 self._architecture_type = "causal_lm"
-                logger.info(f"自动检测: 使用 AutoModelForCausalLM")
+                logger.info("自动检测: 使用 AutoModelForCausalLM")
                 return model
             except Exception as e:
                 errors.append(f"CausalLM: {e}")
@@ -255,7 +254,14 @@ class GenericHFBackend(BaseVLMBackend):
         else:
             raise RuntimeError("Processor 未加载，无法进行编码")
 
-        return {k: v.to(self.device) if isinstance(v, torch.Tensor) else v for k, v in inputs.items()}
+        return {
+            k: (
+                v.to(self.device)
+                if isinstance(v, torch.Tensor) and str(v.device) != str(self.device)
+                else v
+            )
+            for k, v in inputs.items()
+        }
 
     def decode(self, token_ids: torch.Tensor, skip_special_tokens: bool = True) -> List[str]:
         """解码 token ids（覆盖基类以支持 tokenizer 回退）"""

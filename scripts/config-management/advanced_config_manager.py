@@ -36,6 +36,8 @@ import json
 import logging
 import yaml
 from datetime import datetime
+from pathlib import Path
+from typing import Dict, Any, Optional, List, Tuple
 import difflib
 import psutil
 
@@ -44,7 +46,7 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 try:
-    from florence_forge.core import TrainingConfig, ModelConfig, DataConfig
+    from florence_forge.core import TrainingConfig, ModelConfig, DataConfig  # noqa: F401
     from florence_forge.utils import setup_logging
 except ImportError as e:
     print(f"错误: 无法导入必要模块: {e}")
@@ -438,7 +440,7 @@ class AdvancedConfigManager:
                     'type': 'gradient_accumulation_steps',
                     'current': current_grad_accum,
                     'recommended': recommended_grad_accum,
-                    'reason': f'与批次大小配合，保持有效批次大小',
+                    'reason': '与批次大小配合，保持有效批次大小',
                     'impact': 'medium'
                 })
                 optimized_config['gradient_accumulation_steps'] = recommended_grad_accum
@@ -453,7 +455,7 @@ class AdvancedConfigManager:
                         'type': 'lora_rank',
                         'current': current_lora_r,
                         'recommended': recommended_lora_r,
-                        'reason': f'基于GPU内存优化LoRA参数量',
+                        'reason': '基于GPU内存优化LoRA参数量',
                         'impact': 'medium'
                     })
                     optimized_config['model_config']['lora_config']['r'] = recommended_lora_r
@@ -655,7 +657,7 @@ def main():
         results = manager.validate_all_configs(directory)
         
         # 输出结果
-        logger.info(f"\n=== 验证结果 ===")
+        logger.info("\n=== 验证结果 ===")
         logger.info(f"总计: {results['total']} 个文件")
         logger.info(f"通过: {results['passed']} 个")
         logger.info(f"失败: {results['failed']} 个")
@@ -678,7 +680,7 @@ def main():
         results = manager.compare_configs(config1_path, config2_path)
         
         if results:
-            logger.info(f"\n=== 配置比较结果 ===")
+            logger.info("\n=== 配置比较结果 ===")
             logger.info(f"文件1: {results['config1']}")
             logger.info(f"文件2: {results['config2']}")
             logger.info(f"差异总数: {results['summary']['total_differences']}")
@@ -707,7 +709,7 @@ def main():
         results = manager.optimize_config_for_hardware(config_path, hardware_info)
         
         if results:
-            logger.info(f"\n=== 硬件优化建议 ===")
+            logger.info("\n=== 硬件优化建议 ===")
             logger.info(f"配置文件: {results['config_file']}")
             logger.info(f"GPU: {results['hardware_info']['gpu_memory_gb']:.1f}GB x{results['hardware_info']['gpu_count']}")
             logger.info(f"建议总数: {results['summary']['total_suggestions']}")

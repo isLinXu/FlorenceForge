@@ -27,7 +27,7 @@ Florence Forge CLI - 命令行接口
 import argparse
 import sys
 import os
-from typing import Optional, Dict, Any, Tuple, List
+from typing import Dict, Any
 from pathlib import Path
 
 # 在导入torch之前设置MPS设备配置
@@ -53,20 +53,14 @@ logger = logging.getLogger(__name__)
 # 共享常量 / 纯辅助函数（抽离至 _helpers，便于复用且避免循环导入）。
 # 这些名称在此重新导出，保持 `florence_forge.cli.main.xxx` 历史导入路径兼容。
 from ._helpers import (  # noqa: E402
-    SUPPORTED_IMAGE_EXTENSIONS,
     TASK_CONFIG_MAPPING,
     TASK_DESCRIPTIONS,
-    _is_supported_image_file,
-    _iter_image_files,
-    _normalize_inference_stats,
 )
 
 # 重型子命令 handler（抽离至 commands，保持本文件聚焦于参数解析与调度）。
 # 同样重新导出以兼容历史导入路径（含测试中对这些函数的直接 import）。
 from .commands import (  # noqa: E402
-    _apply_config_overrides,
-    _prepare_datasets,
-    _set_nested_attr,
+    run_agentic_task,
     run_data_conversion,
     run_eval_task,
     run_inference_task,
@@ -999,7 +993,67 @@ def create_parser() -> argparse.ArgumentParser:
         default=None,
         help='TVP benchmark 最大样本数 (仅 --benchmark tvp 时生效)',
     )
-    
+
+    # ── Agentic 多步推理命令 ──────────────────────────────────────────
+    agentic_parser = subparsers.add_parser(
+        'agentic',
+        help='运行 Agentic 多步视觉推理（目标分解 → 工具调用 → 验证 → 汇总）',
+    )
+    agentic_parser.add_argument(
+        '--model', '-m',
+        required=True,
+        help='模型路径或 Hugging Face Hub ID',
+    )
+    agentic_parser.add_argument(
+        '--input', '-i',
+        required=True,
+        help='输入图像文件或目录路径',
+    )
+    agentic_parser.add_argument(
+        '--output', '-o',
+        required=True,
+        help='输出结果目录',
+    )
+    agentic_parser.add_argument(
+        '--goal',
+        required=True,
+        help='自然语言目标（如 "detect and count all objects"）',
+    )
+    agentic_parser.add_argument(
+        '--device', '-d',
+        choices=['auto', 'cpu', 'cuda', 'cuda:0', 'cuda:1', 'cuda:2', 'cuda:3', 'mps'],
+        default='auto',
+        help='推理设备 (默认: auto)',
+    )
+    agentic_parser.add_argument(
+        '--use-amp',
+        action='store_true',
+        help='使用自动混合精度加速推理',
+    )
+    agentic_parser.add_argument(
+        '--max-steps',
+        type=int,
+        default=12,
+        help='最大编排步数 (默认: 12)',
+    )
+    agentic_parser.add_argument(
+        '--max-retries',
+        type=int,
+        default=1,
+        help='每个子任务验证失败时的额外重试次数 (默认: 1)',
+    )
+    agentic_parser.add_argument(
+        '--summarize-every',
+        type=int,
+        default=3,
+        help='每 N 步输出一次状态摘要 (默认: 3)',
+    )
+    agentic_parser.add_argument(
+        '--save-transcript',
+        action='store_true',
+        help='保存 agentic 元认知 transcript 文件',
+    )
+
     return parser
 
 def main() -> None:
@@ -1092,7 +1146,11 @@ def main() -> None:
     elif args.command == 'eval':
         success = run_eval_task(args)
         sys.exit(0 if success else 1)
-        
+
+    elif args.command == 'agentic':
+        success = run_agentic_task(args)
+        sys.exit(0 if success else 1)
+
     else:
         parser.print_help()
         sys.exit(1)

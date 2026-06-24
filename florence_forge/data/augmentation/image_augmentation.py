@@ -1,7 +1,7 @@
 """图像数据增强"""
 
 import random
-from typing import Tuple, List, Optional
+from typing import Tuple
 from PIL import Image, ImageEnhance, ImageFilter
 import numpy as np
 

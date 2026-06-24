@@ -11,7 +11,6 @@ import json
 import logging
 from dataclasses import dataclass, asdict
 from collections import defaultdict, deque
-import warnings
 
 logger = logging.getLogger(__name__)
 

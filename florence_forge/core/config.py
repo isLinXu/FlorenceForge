@@ -176,7 +176,7 @@ class ModelConfig(WarnOnUnknownFieldsModel):
         # 如果指定了 flash_attention_2，检查是否实际安装
         if v == "flash_attention_2":
             try:
-                import flash_attn
+                import flash_attn  # noqa: F401
             except ImportError:
                 warnings.warn(
                     "flash_attention_2 被指定但 flash-attn 未安装，"
@@ -263,6 +263,9 @@ class DataConfig(WarnOnUnknownFieldsModel):
     # 数据增强
     use_augmentation: bool = Field(default=False)
     augmentation_prob: float = Field(default=0.5, ge=0.0, le=1.0)
+    augment_image: bool = Field(default=True, description="是否启用图像增强")
+    augment_text: bool = Field(default=False, description="是否启用文本增强（可能破坏结构化标签）")
+    augment_bbox: bool = Field(default=True, description="是否启用边界框增强")
 
     # 数据平衡
     use_balanced_sampling: bool = Field(default=True)

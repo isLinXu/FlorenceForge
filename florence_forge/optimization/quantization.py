@@ -32,8 +32,7 @@
 """
 
 import logging
-from typing import Optional, Dict, Any, Tuple, Union
-from pathlib import Path
+from typing import Optional, Dict, Any, Tuple
 
 import torch
 import torch.nn as nn
@@ -168,7 +167,6 @@ class ModelQuantizer:
         - 8-bit 量化：load_in_8bit=True
         - 4-bit 量化：load_in_4bit=True（QLoRA 推荐）
         """
-        import bitsandbytes as bnb
         from transformers import AutoModelForCausalLM, AutoProcessor
 
         method = self.config.method
