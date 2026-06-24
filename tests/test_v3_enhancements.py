@@ -9,11 +9,8 @@
 5. ModelMerger _linear_merge vs _weighted_merge 区别
 6. DeviceConfigurator 多 GPU 选择、CPU 提示
 """
-import json
 import logging
-import tempfile
-from pathlib import Path
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
@@ -78,7 +75,7 @@ class TestTrainingLoopNaNInfDetection:
         nan_output.loss = torch.tensor(float('nan'))
 
         with patch.object(type(model), '__call__', return_value=nan_output):
-            metrics = loop.train_epoch(
+            loop.train_epoch(
                 train_dataloader=dataloader,
                 optimizer=optimizer,
                 lr_scheduler=lr_scheduler,
@@ -207,7 +204,7 @@ class TestCheckpointManagerResume:
         loop = TrainingLoop(model=model, config=config)
         assert loop.global_step == 0
 
-        metadata = checkpoint_manager.resume_training_state(
+        checkpoint_manager.resume_training_state(
             checkpoint_path=tmp_path / "output" / "checkpoint-epoch-5",
             optimizer=optimizer,
             lr_scheduler=lr_scheduler,
@@ -323,7 +320,7 @@ class TestLoRAManagerExportImport:
 
 
 class TestModelMergerMergeStrategies:
-    """验证 _linear_merge 和 _weighted_merge 的区别"""
+    """验证 ``apply_weight_delta`` 线性/加权合并语义。"""
 
     @pytest.fixture
     def merger(self):
@@ -331,38 +328,37 @@ class TestModelMergerMergeStrategies:
         return ModelMerger()
 
     def test_linear_merge_adds_weights(self, merger):
-        """_linear_merge 应直接相加"""
+        """scaling_factor=1.0 时直接相加。"""
         model = nn.Linear(4, 2)
         original_weight = model.weight.data.clone()
         lora_weights = {'weight': torch.ones_like(model.weight.data) * 0.1}
         
-        merger._linear_merge(model, lora_weights)
+        merger.apply_weight_delta(model, lora_weights)
         
         expected = original_weight + 0.1
         assert torch.allclose(model.weight.data, expected)
 
     def test_weighted_merge_with_scaling(self, merger):
-        """_weighted_merge 应支持缩放因子"""
+        """scaling_factor 缩放增量。"""
         model = nn.Linear(4, 2)
         original_weight = model.weight.data.clone()
         lora_weights = {'weight': torch.ones_like(model.weight.data) * 0.1}
         
-        merger._weighted_merge(model, lora_weights, scaling_factor=0.5)
+        merger.apply_weight_delta(model, lora_weights, scaling_factor=0.5)
         
         expected = original_weight + 0.1 * 0.5
         assert torch.allclose(model.weight.data, expected)
 
     def test_weighted_merge_default_scaling_is_1(self, merger):
-        """默认 scaling_factor=1.0 时，结果与 linear 相同"""
+        """scaling_factor=1.0 时两次合并结果一致。"""
         model1 = nn.Linear(4, 2)
         model2 = nn.Linear(4, 2)
-        # 复制权重使两个模型一致
         model2.load_state_dict(model1.state_dict())
         
         lora_weights = {'weight': torch.ones_like(model1.weight.data) * 0.2}
         
-        merger._linear_merge(model1, lora_weights)
-        merger._weighted_merge(model2, lora_weights, scaling_factor=1.0)
+        merger.apply_weight_delta(model1, lora_weights, scaling_factor=1.0)
+        merger.apply_weight_delta(model2, lora_weights, scaling_factor=1.0)
         
         assert torch.allclose(model1.weight.data, model2.weight.data)
 
