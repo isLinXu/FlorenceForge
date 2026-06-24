@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Florence Forge - 多数据集多任务训练器"""
 
-import csv
 import json
 import logging
 from collections import defaultdict
@@ -15,7 +14,6 @@ from ..core.config import TrainingConfig
 from ..data.multi_dataset_manager import MultiDatasetManager
 from .gradient_validator import GradientValidationConfig, GradientValidator
 from .memory_monitor import MemoryMonitor, MemoryMonitorConfig
-from .scheduler import TaskScheduler
 from .trainer import MultiTaskTrainer
 
 logger = logging.getLogger(__name__)
@@ -88,7 +86,7 @@ class MultiDatasetTrainer(MultiTaskTrainer):
         for warning in validation_result.get("warnings", []):
             logger.warning(warning)
 
-        full_dataset = self.dataset_manager.create_unified_dataset(
+        self.dataset_manager.create_unified_dataset(
             task_types=self.task_types,
             processor=getattr(self, "processor", None),
         )

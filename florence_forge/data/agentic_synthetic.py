@@ -14,17 +14,14 @@ import json
 import logging
 import random
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
-from ..core.agentic_tokens import has_required_phases
 from ..core.tasks import get_task_config
-from .agentic_trajectory_expander import AgenticChainBuilder, inject_coordinate_noise
+from .agentic_trajectory_expander import AgenticChainBuilder
 from .tvp_synthetic import (
     generate_maze_sample,
-    generate_path_sample,
     generate_spatial_sample,
     pixel_box_to_vp_box,
-    to_vp_coord,
 )
 
 logger = logging.getLogger(__name__)

@@ -1,6 +1,5 @@
 """Environment diagnostic regressions."""
 
-from pathlib import Path
 
 from florence_forge.utils.diagnostics import (
     DependencyCheck,

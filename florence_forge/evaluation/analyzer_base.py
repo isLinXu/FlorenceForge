@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import logging
 import numpy as np
-from collections import defaultdict, Counter
+from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 

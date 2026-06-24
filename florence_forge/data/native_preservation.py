@@ -30,9 +30,8 @@ import json
 import logging
 import random
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
-from ..core.tasks import FLORENCE2_TASKS, AGENTIC_TASK_NAMES, TVP_TASK_NAMES
 
 logger = logging.getLogger(__name__)
 

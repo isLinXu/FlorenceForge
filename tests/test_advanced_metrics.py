@@ -1,12 +1,8 @@
 """测试高级评估指标功能"""
 
 import unittest
-import numpy as np
 import torch
 from PIL import Image
-from pathlib import Path
-import tempfile
-import os
 
 from florence_forge.evaluation.advanced_metrics import (
     SemanticMetricsCalculator,
@@ -140,7 +136,7 @@ class TestEfficiencyMetricsCalculator(unittest.TestCase):
         class MockModel:
             def __call__(self, x):
                 # 创建一些临时张量来消耗内存
-                temp = torch.randn(100, 100, 100)
+                torch.randn(100, 100, 100)
                 return torch.rand(x.shape[0], 10)
             
             def parameters(self):

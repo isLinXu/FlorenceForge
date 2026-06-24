@@ -3,21 +3,19 @@
 示例运行器 - 提供完整的使用示例和教程脚本
 """
 
-import os
 import sys
 import json
-import tempfile
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Dict, Any
 import logging
+import numpy as np
 
 # 添加项目根目录到Python路径
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 try:
-    import torch
-    import numpy as np
+    import torch  # noqa: F401
     from PIL import Image
 except ImportError as e:
     print(f"警告: 无法导入必要的依赖: {e}")
@@ -133,7 +131,7 @@ class ExampleRunner:
         logger.info("运行数据处理示例...")
         
         try:
-            from florence_forge.data.dataset import TaskSample, MultiTaskDataset
+            from florence_forge.data.dataset import TaskSample
             from florence_forge.data.builder import DatasetBuilder
             
             # 1. 创建任务样本
@@ -221,7 +219,6 @@ class ExampleRunner:
         logger.info("运行模型使用示例...")
         
         try:
-            from florence_forge.core.model import Florence2MultiTaskModel
             from florence_forge.core.config import ModelConfig
             from florence_forge.core.tasks import FLORENCE2_TASKS, get_task_config
             
@@ -293,8 +290,6 @@ class ExampleRunner:
         logger.info("运行训练流程示例...")
         
         try:
-            from florence_forge.training.trainer import MultiTaskTrainer
-            from florence_forge.training.scheduler import TaskScheduler
             from florence_forge.core.config import TrainingConfig
             
             # 1. 创建训练配置
@@ -395,8 +390,6 @@ class ExampleRunner:
         logger.info("运行评估流程示例...")
         
         try:
-            from florence_forge.evaluation.evaluator import MultiTaskEvaluator
-            from florence_forge.evaluation.metrics import MetricCalculator
             
             # 1. 评估配置
             evaluation_config = {

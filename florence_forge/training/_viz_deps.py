@@ -20,7 +20,7 @@ NUMPY_AVAILABLE = False
 # 检测 matplotlib
 try:
     import matplotlib.pyplot as plt
-    import matplotlib
+    import matplotlib  # noqa: F401
     MATPLOTLIB_AVAILABLE = True
     MATLOTLIB_AVAILABLE = True
 except ImportError as e:

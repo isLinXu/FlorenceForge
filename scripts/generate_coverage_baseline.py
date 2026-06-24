@@ -10,7 +10,6 @@ from __future__ import annotations
 import ast
 import json
 from pathlib import Path
-from collections import defaultdict
 
 
 def find_imports_in_test(test_file: Path) -> set[str]:

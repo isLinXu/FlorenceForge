@@ -9,17 +9,15 @@ import torch.nn as nn
 from typing import Optional, Dict, Any, List, Union
 
 from PIL import Image
-from transformers import AutoProcessor, AutoModelForCausalLM
-from peft import LoraConfig, get_peft_model, PeftModel
+from peft import LoraConfig, get_peft_model
 
 logger = logging.getLogger(__name__)
 
 # 从 backends 模块导入公共工具函数（消除 model.py 与后端间的重复）
-from .backends.base_vlm import _check_flash_attn_availability, _patch_transformers_import_check
 
 
-from .config import ModelConfig, LoRAConfig, TrainingConfig
-from .tasks import FLORENCE2_TASKS, get_task_config, get_task_config_typed
+from .config import ModelConfig
+from .tasks import get_task_config_typed
 from .backends import VLMBackendRegistry, BaseVLMBackend
 
 
@@ -56,7 +54,7 @@ class Florence2MultiTaskModel(nn.Module):
             # 注册为子模块，确保 PyTorch 参数遍历、设备迁移、状态保存/加载正常工作
             if isinstance(self._backend, nn.Module):
                 self.add_module('_backend', self._backend)
-            logger.info(f"后端已初始化（延迟加载模式），请显式调用 model.load() 加载模型")
+            logger.info("后端已初始化（延迟加载模式），请显式调用 model.load() 加载模型")
         else:
             # 后端未注册，抛出明确错误而非静默回退
             available = VLMBackendRegistry.list_backends()

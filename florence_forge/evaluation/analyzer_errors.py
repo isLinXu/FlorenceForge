@@ -13,8 +13,8 @@ import numpy as np
 from .analyzer_base import logger, _load_clustering_dependencies
 
 try:
-    from sklearn.cluster import DBSCAN, KMeans
-    from sklearn.metrics import silhouette_score
+    from sklearn.cluster import DBSCAN, KMeans  # noqa: F401
+    from sklearn.metrics import silhouette_score  # noqa: F401
     CLUSTERING_AVAILABLE = True
 except ImportError:
     CLUSTERING_AVAILABLE = False

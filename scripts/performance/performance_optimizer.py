@@ -11,8 +11,11 @@ import psutil
 import logging
 from pathlib import Path
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, TYPE_CHECKING
 from contextlib import contextmanager
+from concurrent.futures import ThreadPoolExecutor
+import numpy as np
+from PIL import Image
 
 # 添加项目根目录到Python路径
 project_root = Path(__file__).parent.parent
@@ -61,7 +64,6 @@ class PerformanceProfiler:
         start_memory = self.process.memory_info().rss / 1024 / 1024
         
         # GPU信息（如果可用）
-        gpu_usage_start = None
         gpu_memory_start = None
         if torch.cuda.is_available():
             torch.cuda.synchronize()

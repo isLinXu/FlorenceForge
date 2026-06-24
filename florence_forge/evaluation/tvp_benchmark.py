@@ -6,7 +6,7 @@ import json
 import logging
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from .tvp_metrics import TVPCompositeMetric
 

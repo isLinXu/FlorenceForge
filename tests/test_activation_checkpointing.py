@@ -1,7 +1,6 @@
 """激活值重计算策略测试（GradientCheckpointOptimizer）。"""
 
 import pytest
-import torch
 import torch.nn as nn
 from unittest.mock import MagicMock
 

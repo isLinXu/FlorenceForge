@@ -1,10 +1,6 @@
 """v2 训练栈新增模块单元测试。"""
 
-import gzip
-from pathlib import Path
-from unittest.mock import MagicMock
 
-import torch
 import torch.nn as nn
 
 from florence_forge.core.config import TrainingConfig

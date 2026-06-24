@@ -29,7 +29,6 @@ from ..core.config import (
 from ..core.yaml_config import (
     FlorenceForgeYAMLConfig, create_yaml_config_template, validate_yaml_config
 )
-from ..core.tasks import list_all_tasks, get_tasks_by_category
 
 class ConfigManager:
     """配置管理器"""
@@ -110,7 +109,7 @@ class ConfigManager:
                     errors.append("LoRA rank (r) 必须大于 0")
             
             if errors:
-                print(f"✗ 配置验证失败:")
+                print("✗ 配置验证失败:")
                 for error in errors:
                     print(f"  - {error}")
                 return False
@@ -333,7 +332,7 @@ class ConfigManager:
             
             # 显示训练配置信息
             if yaml_config.training:
-                print(f"\n训练配置:")
+                print("\n训练配置:")
                 training = yaml_config.training
                 print(f"  训练轮数: {training.get('num_epochs', 'N/A')}")
                 print(f"  批次大小: {training.get('batch_size', 'N/A')}")
@@ -354,7 +353,7 @@ class ConfigManager:
     
     def list_supported_tasks(self) -> None:
         """列出所有支持的任务类型"""
-        from florence_forge.core.tasks import FLORENCE2_TASKS, TaskCategory
+        from florence_forge.core.tasks import FLORENCE2_TASKS
         
         print("\n支持的Florence-2任务类型:")
         print("=" * 50)
