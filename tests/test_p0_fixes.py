@@ -8,14 +8,10 @@ These tests verify the fixes for the P0 issues identified in the deep analysis:
 """
 
 import json
-from pathlib import Path
-from unittest.mock import MagicMock, patch
 
-import torch
-import torch.nn as nn
 
-from florence_forge.core.config import LoRAConfig, ModelConfig
-from florence_forge.data.validator import DataValidator, validate_data_format
+from florence_forge.core.config import LoRAConfig
+from florence_forge.data.validator import validate_data_format
 from florence_forge.training.lora_manager import LoRAManager
 from florence_forge.training.model_merger import ModelMerger
 

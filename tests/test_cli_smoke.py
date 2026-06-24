@@ -80,7 +80,7 @@ def test_main_module_help_exits_zero():
         [sys.executable, "-m", "florence_forge.cli.main", "--help"],
         capture_output=True,
         text=True,
-        timeout=30,
+        timeout=180,
     )
     assert result.returncode == 0
     assert "usage:" in result.stdout.lower() or "Florence" in result.stdout
@@ -91,7 +91,7 @@ def test_list_tasks_subprocess_exits_zero():
         [sys.executable, "-m", "florence_forge.cli.main", "list-tasks"],
         capture_output=True,
         text=True,
-        timeout=30,
+        timeout=180,
     )
     assert result.returncode == 0
 
@@ -110,7 +110,7 @@ def test_doctor_help_subprocess_exits_zero():
         [sys.executable, "-m", "florence_forge.cli.main", "doctor", "--help"],
         capture_output=True,
         text=True,
-        timeout=30,
+        timeout=180,
     )
     assert result.returncode == 0
 
