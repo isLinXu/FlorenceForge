@@ -7,7 +7,7 @@
 import pytest
 import torch
 import torch.nn as nn
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from florence_forge.core.backends.base_vlm import VLMBackendRegistry
 

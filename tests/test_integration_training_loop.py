@@ -184,6 +184,7 @@ def mock_dataset():
     dataset._sample_offset_cache = {}
     # 初始化 _sample_cache 以支持 use_cache / _cache_index 属性
     dataset._init_sample_cache()
+    dataset._init_augmentation()
     dataset.backend = None
 
     return dataset
@@ -224,8 +225,6 @@ class TestTrainingLoopIntegration:
 
     def test_dataset_getitem_with_encoding(self, mock_dataset):
         """验证 Dataset __getitem__ 返回正确结构"""
-        from florence_forge.data.dataset import MultiTaskDataset
-        from unittest.mock import patch
 
         # 设置一个 mock processor
         mock_processor = MagicMock()
@@ -234,6 +233,11 @@ class TestTrainingLoopIntegration:
             "attention_mask": torch.tensor([[1, 1, 1, 1, 1]]),
             "pixel_values": torch.randn(1, 3, 224, 224),
         }
+        mock_tokenizer = MagicMock()
+        mock_tokenizer.return_value = {
+            "input_ids": torch.tensor([[6, 7]]),
+        }
+        mock_processor.tokenizer = mock_tokenizer
         mock_dataset.processor = mock_processor
 
         # Patch 图像加载以避免 FileNotFoundError
@@ -276,7 +280,6 @@ class TestTrainingLoopRefactored:
         if not torch.cuda.is_available():
             pytest.skip("CUDA 不可用")
 
-        from florence_forge.training.trainer import MultiTaskTrainer
 
         config = TrainingConfig(device="cuda")
         config.distributed_settings = DistributedConfig(
