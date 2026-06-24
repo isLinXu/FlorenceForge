@@ -162,7 +162,6 @@ def has_required_phases(text: str) -> bool:
 
 def get_phase_order(text: str) -> List[str]:
     """Return the sequence of phase open-tokens as they appear in *text*."""
-    import re
     found: List[str] = []
     for phase in AGENTIC_PHASE_ORDER:
         open_tok = AGENTIC_PHASE_TOKENS[phase][0]

@@ -7,13 +7,12 @@ import logging
 import warnings
 from typing import List, Dict, Tuple, Any, Optional, Union
 from dataclasses import dataclass
-from collections import defaultdict
 import numpy as np
 
 from ...utils.optional_dependencies import missing_dependency_message
 
 try:
-    from sklearn.metrics import average_precision_score
+    from sklearn.metrics import average_precision_score  # noqa: F401
     SKLEARN_AVAILABLE = True
 except ImportError:
     SKLEARN_AVAILABLE = False

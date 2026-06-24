@@ -5,7 +5,6 @@ import time
 
 import torch
 
-from florence_forge.utils import memory as mem
 from florence_forge.utils.memory import (
     GPUMemoryInfo,
     MemoryInfo,

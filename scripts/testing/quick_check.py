@@ -7,7 +7,7 @@ import sys
 import time
 import logging
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any
 
 # 添加项目根目录到Python路径
 # 本脚本位于 scripts/testing/ 下，仓库根目录需向上回溯三层
@@ -144,8 +144,8 @@ class QuickChecker:
         """检查核心模块导入"""
         try:
             # 检查核心依赖
-            import torch
-            import transformers
+            import torch  # noqa: F401
+            import transformers  # noqa: F401
             
             # 检查基础模块是否可以导入（不实际导入有相对导入的模块）
             import sys
@@ -301,8 +301,7 @@ class QuickChecker:
         """检查任务样本创建"""
         try:
             # 不实际导入TaskSample，只检查其定义是否存在
-            import sys
-            
+
             # 检查TaskSample类定义是否存在于dataset.py文件中
             dataset_file = Path(__file__).resolve().parents[2] / "florence_forge" / "data" / "dataset.py"
             if not dataset_file.exists():
@@ -484,7 +483,7 @@ class QuickChecker:
             # 检查基本功能
             x = torch.randn(2, 3)
             y = torch.randn(3, 4)
-            z = torch.mm(x, y)
+            z = torch.mm(x, y)  # noqa: F841
             
             # 检查CUDA（如果可用）
             cuda_available = torch.cuda.is_available()

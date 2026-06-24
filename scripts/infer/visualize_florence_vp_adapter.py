@@ -901,7 +901,6 @@ def _draw_visualization(
 
 
 def run(args: argparse.Namespace) -> Dict[str, Any]:
-    import torch
 
     model = _load_model(args)
     parser = VisualPrimitiveParser()

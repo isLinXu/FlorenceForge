@@ -5,13 +5,11 @@ Florence Forge - 多数据集多任务训练示例
 展示如何使用MultiDatasetManager和MultiDatasetTrainer进行多数据集多任务训练
 """
 
-import os
 import json
 import logging
 from pathlib import Path
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, Optional
 
-import torch
 from transformers import AutoProcessor
 
 # 设置日志

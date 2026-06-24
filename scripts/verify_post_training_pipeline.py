@@ -20,7 +20,7 @@ import tempfile
 import time
 import warnings
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import List
 
 import numpy as np
 import torch
@@ -383,7 +383,7 @@ def main() -> int:
             if name == "train_and_save":
                 checkpoint_dir = step_fn()
             elif name == "load_checkpoint":
-                model = step_fn(checkpoint_dir)
+                step_fn(checkpoint_dir)
             elif name == "inference":
                 step_fn(checkpoint_dir)
             else:
@@ -396,12 +396,12 @@ def main() -> int:
 
     elapsed = time.time() - start_time
     print(f"\n{'='*60}")
-    print(f"  验证完成")
+    print("  验证完成")
     print(f"{'='*60}")
     print(f"  总耗时: {elapsed:.2f}s")
     print(f"  通过步骤: {len(steps) - len(errors)}/{len(steps)}")
     if errors:
-        print(f"  失败步骤:")
+        print("  失败步骤:")
         for err in errors:
             print(f"    - {err}")
         return 1

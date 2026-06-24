@@ -14,8 +14,8 @@ from ..utils.optional_dependencies import missing_dependency_message
 
 
 try:
-    from pycocotools.coco import COCO
-    from pycocotools.cocoeval import COCOeval
+    from pycocotools.coco import COCO  # noqa: F401
+    from pycocotools.cocoeval import COCOeval  # noqa: F401
     COCO_AVAILABLE = True
 except ImportError:
     COCO_AVAILABLE = False

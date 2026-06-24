@@ -6,7 +6,7 @@ VLMBackendRegistry 注册与发现机制。
 
 import pytest
 import torch
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from florence_forge.core.backends.base_vlm import (
     BaseVLMBackend,

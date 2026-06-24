@@ -6,7 +6,7 @@
 import json
 import time
 import logging
-from typing import Optional, Dict, Any, Union, List
+from typing import TYPE_CHECKING, Optional, Dict, Any, Union, List
 from pathlib import Path
 from collections import defaultdict
 
@@ -14,6 +14,9 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
+
+if TYPE_CHECKING:  # pragma: no cover - typing-only import
+    import PIL
 
 from ..core.tasks import FLORENCE2_TASKS
 from ..data.collate import Florence2Collator
@@ -311,7 +314,6 @@ class MultiTaskEvaluator:
         
         # 存储预测结果
         all_predictions = defaultdict(list)
-        all_references = defaultdict(list)
         
         # 评估统计
         total_samples = 0

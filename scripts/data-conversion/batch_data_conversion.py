@@ -315,7 +315,7 @@ class DataConversionWorkflow:
                 for sample in val_samples:
                     f.write(sample + '\n')
             
-            self.logger.info(f"✅ 数据分割完成:")
+            self.logger.info("✅ 数据分割完成:")
             self.logger.info(f"  训练集: {len(train_samples)} 样本 -> {train_file}")
             self.logger.info(f"  验证集: {len(val_samples)} 样本 -> {val_file}")
             

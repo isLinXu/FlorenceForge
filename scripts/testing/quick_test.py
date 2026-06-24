@@ -20,7 +20,7 @@ import yaml
 import logging
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 # 添加项目根目录到Python路径
 # 本脚本位于 scripts/testing/ 下，仓库根目录需向上回溯三层
@@ -507,7 +507,7 @@ def main():
     level = logging.DEBUG if args.verbose else logging.INFO
     try:
         setup_logging(level=level)
-    except:
+    except Exception:
         logging.basicConfig(level=level)
     
     tester = QuickTester()

@@ -49,19 +49,6 @@ class Florence2Collator:
             )
 
         # 分离张量字段与非张量字段
-        tensor_keys = [
-            "input_ids",
-            "attention_mask",
-            "pixel_values",
-            "labels",
-            "loss_weights",
-            "reference_ids",
-            "prompt_input_ids",
-            "prompt_attention_mask",
-            "token_type_ids",
-            "position_ids",
-            "mm_token_type_ids",
-        ]
         non_tensor_keys = ["task_type", "weight", "metadata", "prompt", "answer"]
 
         collated: Dict[str, Any] = {}

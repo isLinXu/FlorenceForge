@@ -13,9 +13,6 @@ They cover the integration touchpoints identified in the audit:
 
 from __future__ import annotations
 
-import re
-import sys
-from pathlib import Path
 
 import pytest
 
@@ -961,7 +958,7 @@ class TestNativePreservation:
 
         # Verify output content
         with open(output_path) as f:
-            lines = [json.loads(l) for l in f if l.strip()]
+            lines = [json.loads(line) for line in f if line.strip()]
         assert len(lines) == summary["total_count"]
 
     def test_native_task_sampler(self, tmp_path):

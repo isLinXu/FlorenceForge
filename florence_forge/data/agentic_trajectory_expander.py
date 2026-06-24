@@ -24,14 +24,11 @@ from __future__ import annotations
 import json
 import logging
 import random
-import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..core.agentic_tokens import (
-    AGENTIC_PHASE_ORDER,
     wrap_phase,
-    extract_all_phases,
     has_required_phases,
 )
 from ..core.visual_primitives import (
@@ -41,7 +38,6 @@ from ..core.visual_primitives import (
     format_ref_box,
     sort_boxes_left_to_right,
 )
-from .tvp_converter import TVPChainBuilder
 
 logger = logging.getLogger(__name__)
 

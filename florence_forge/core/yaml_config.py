@@ -11,7 +11,7 @@ from typing import Dict, Any, List, Optional, Union
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from .config import TrainingConfig, DataConfig, ModelConfig, LoRAConfig, OptimizationConfig, TaskSchedulingConfig
+from .config import TrainingConfig, DataConfig
 from .tasks import validate_task_name, list_all_tasks
 from ..data.multi_dataset_manager import MultiDatasetManager, DatasetInfo, TaskDatasetMapping
 
@@ -577,6 +577,6 @@ def validate_yaml_config(config_path: Union[str, Path]) -> bool:
         print("配置验证通过!")
         return True
         
-    except Exception as e:
+    except Exception:
         logger.exception("配置验证失败")
         return False

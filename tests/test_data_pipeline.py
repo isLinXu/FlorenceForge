@@ -5,7 +5,6 @@ import tempfile
 from pathlib import Path
 from collections import OrderedDict
 from PIL import Image
-import numpy as np
 import torch
 
 from florence_forge.data.dataset import MultiTaskDataset, TaskSample, _load_image_cached
