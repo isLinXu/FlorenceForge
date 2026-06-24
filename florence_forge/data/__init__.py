@@ -13,6 +13,7 @@ from .loader import (
 from .converter import DataFormatConverter
 from .dataset import MultiTaskDataset, TaskSample
 from .validator import DataValidator, validate_data_format
+from .profiler import DataProfiler
 from .utils import generate_mask_from_polygon
 from .vp_converter import VisualPrimitiveConverter
 from .agentic_trajectory_expander import AgenticTrajectoryExpander, AgenticChainBuilder
@@ -28,6 +29,7 @@ __all__ = [
     "TaskRoundRobinSampler",
     "DataFormatConverter",
     "DataValidator",
+    "DataProfiler",
     "validate_data_format",
     "generate_mask_from_polygon",
     "VisualPrimitiveConverter",
