@@ -275,6 +275,7 @@ omit = [
 ]
 
 [tool.coverage.report]
+fail_under = 56
 exclude_lines = [
     "pragma: no cover",
     "def __repr__",
@@ -287,6 +288,15 @@ exclude_lines = [
     "class .*\\bProtocol\\):",
     "@(abc\\.)?abstractmethod",
 ]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401", "E402"]
+"tests/*" = ["S101", "E402"]
+"florence_forge/cli/config_manager.py" = ["E402"]
+"florence_forge/core/model.py" = ["E402"]
+"florence_forge/evaluation/advanced_metrics/*.py" = ["E402"]
+"florence_forge/evaluation/analyzer_*.py" = ["E402"]
+"florence_forge/examples/*.py" = ["E402"]
 
 # Flake8 configuration
 [tool.flake8]
@@ -304,6 +314,6 @@ exclude = [
     ".pytest_cache",
 ]
 per-file-ignores = [
-    "__init__.py:F401",
+    "__init__.py:F401,E402",
     "tests/*:S101",
 ]

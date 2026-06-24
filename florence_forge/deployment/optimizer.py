@@ -8,8 +8,7 @@
 
 import torch
 import torch.nn as nn
-import torch.quantization as quant
-from typing import Union, Optional, Callable, List, Dict, Any
+from typing import Optional, List, Dict, Any
 import logging
 import copy
 import numpy as np
@@ -316,7 +315,7 @@ class DeploymentOptimizer:
             优化后的模型
         """
         try:
-            from torch.utils.mobile_optimizer import optimize_for_mobile
+            from torch.utils.mobile_optimizer import optimize_for_mobile  # noqa: F401
             
             # 先转换为TorchScript
             model_copy = copy.deepcopy(self.original_model)

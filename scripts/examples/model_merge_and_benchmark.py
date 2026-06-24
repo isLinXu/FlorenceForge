@@ -4,11 +4,9 @@
 展示如何使用FlorenceForge的模型合并和benchmark评估功能
 """
 
-import os
 import sys
 import logging
 from pathlib import Path
-from typing import Dict, Any, Optional
 
 # 添加项目根目录到Python路径
 project_root = Path(__file__).parent.parent.parent
@@ -18,8 +16,6 @@ from florence_forge.core.model import Florence2MultiTaskModel
 from florence_forge.training.model_merger import ModelMerger
 from florence_forge.training.lora_manager import LoRAManager
 from florence_forge.evaluation.benchmark import BenchmarkEvaluator
-from florence_forge.data.dataset import MultiTaskDataset
-from peft import PeftModel
 
 # 配置日志
 logging.basicConfig(
@@ -117,7 +113,7 @@ class ModelMergeAndBenchmarkDemo:
         
         try:
             # 1. 加载基础模型
-            base_model = Florence2MultiTaskModel(
+            base_model = Florence2MultiTaskModel(  # noqa: F841
                 model_name="microsoft/Florence-2-base",
                 device="cpu"
             )

@@ -1,7 +1,6 @@
 """DatasetSampleCache 单元测试。"""
 
 import torch
-from collections import OrderedDict
 
 from florence_forge.data.dataset_sample_cache import DatasetSampleCache
 from florence_forge.data.dataset_types import TaskSample

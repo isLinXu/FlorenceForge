@@ -10,7 +10,7 @@ import torch
 import torch.nn as nn
 import logging
 import json
-from typing import Union, Optional, Callable, List, Dict, Any
+from typing import Union, Optional, List, Dict, Any
 from pathlib import Path
 
 from ..utils.optional_dependencies import missing_dependency_message
@@ -169,7 +169,7 @@ class ModelExporter:
             onnx.checker.check_model(onnx_model)
             
             # 创建推理会话测试
-            ort_session = ort.InferenceSession(str(onnx_path))
+            ort.InferenceSession(str(onnx_path))
             
             logger.info("ONNX模型验证通过")
             

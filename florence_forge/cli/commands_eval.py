@@ -11,7 +11,10 @@ import shutil
 import tempfile
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:  # pragma: no cover - typing-only import
+    from florence_forge.data.dataset import MultiTaskDataset
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +33,7 @@ def _build_eval_dataset_from_jsonl(data_path: str, model) -> "MultiTaskDataset":
         raise FileNotFoundError(f"评估数据文件不存在: {source}")
 
     prompt_to_task = sorted(
-        ((cfg.get("prompt", ""), name) for name, cfg in FLORENCE2_TASKS.items()),
+        ((cfg.prompt, name) for name, cfg in FLORENCE2_TASKS.items()),
         key=lambda item: len(item[0]),
         reverse=True,
     )

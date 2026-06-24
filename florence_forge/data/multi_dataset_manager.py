@@ -12,8 +12,7 @@ from typing import Dict, List, Any, Optional, Union, Tuple
 from collections import defaultdict
 from dataclasses import dataclass
 
-from .dataset import MultiTaskDataset, TaskSample
-from .builder import DatasetBuilder
+from .dataset import MultiTaskDataset
 from ..core.config import DataConfig
 from ..core.tasks import validate_task_name
 

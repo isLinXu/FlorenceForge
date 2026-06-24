@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 from ._helpers import TASK_CONFIG_MAPPING
 
@@ -101,7 +101,7 @@ def run_training_task(
         logger.info("🚀 开始训练任务")
         logger.info(f"   任务类型: {task or 'custom'}")
         logger.info(f"   配置文件: {actual_config_path}")
-        logger.info(f"   训练器: MultiTaskTrainer (模块化训练栈)")
+        logger.info("   训练器: MultiTaskTrainer (模块化训练栈)")
         if overrides:
             logger.info(f"   参数覆盖: {overrides}")
 

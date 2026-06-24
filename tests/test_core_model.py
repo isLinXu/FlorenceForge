@@ -2,8 +2,7 @@
 import pytest
 import torch
 from PIL import Image
-from pathlib import Path
-from unittest.mock import Mock, MagicMock
+from unittest.mock import MagicMock
 
 from florence_forge.core.model import Florence2MultiTaskModel
 from florence_forge.core.config import ModelConfig

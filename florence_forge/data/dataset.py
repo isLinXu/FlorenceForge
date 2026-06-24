@@ -3,20 +3,16 @@
 提供多任务数据集的加载、处理和采样功能
 """
 
-import json
-import os
 import numbers
 import random
 import logging
 import torch
-from io import BytesIO
 from collections import defaultdict, OrderedDict
 from typing import Optional, Dict, Any, List, Union, Tuple
 from pathlib import Path
 from torch.utils.data import Dataset
-from PIL import Image
 
-from ..core.tasks import FLORENCE2_TASKS, validate_task_name
+from ..core.tasks import validate_task_name
 from ..core.config import DataConfig
 from .collate import Florence2Collator
 from .dataset_types import TaskSample
@@ -26,13 +22,6 @@ from . import dataset_encoding
 # 图像缓存层已抽出到 image_cache.py；此处重新导出以保持历史导入路径
 # （`florence_forge.data.dataset._load_image_cached`）与单测 patch 目标不变。
 from .image_cache import (
-    _ImagePayloadCacheInfo,
-    _IMAGE_PAYLOAD_CACHE_DEFAULT_MAX_BYTES,
-    _load_image_payload_cached,
-    _image_payload_cache_clear,
-    _image_payload_cache_info,
-    _image_payload_cache_current_bytes,
-    _set_image_payload_cache_max_bytes,
     _load_image_cached,
 )
 
@@ -98,6 +87,7 @@ class MultiTaskDataset(Dataset):
         self._calculate_task_weights()
         self._build_task_indices()
         self._init_sample_cache()
+        self._init_augmentation()
 
         if not self.lazy_load and self.use_cache and self.processor is not None:
             self.preprocess_and_cache()
@@ -120,6 +110,80 @@ class MultiTaskDataset(Dataset):
             sample_index=self._sample_index,
             samples=self.samples,
         )
+
+    def _init_augmentation(self) -> None:
+        """根据 ``DataConfig`` 初始化增强器实例。
+
+        缓存模式或 ``use_augmentation=False`` 时全部置 ``None`` 以保证确定性。
+        """
+        self._image_aug = None
+        self._text_aug = None
+        self._bbox_aug = None
+
+        if not getattr(self.config, "use_augmentation", False):
+            return
+        if self.use_cache:
+            return
+
+        prob = getattr(self.config, "augmentation_prob", 0.5)
+
+        if getattr(self.config, "augment_image", True):
+            from .augmentation import ImageAugmentation
+            self._image_aug = ImageAugmentation(probability=prob)
+        if getattr(self.config, "augment_text", False):
+            from .augmentation import TextAugmentation
+            self._text_aug = TextAugmentation(probability=prob)
+        if getattr(self.config, "augment_bbox", True):
+            from .augmentation import BBoxAugmentation
+            self._bbox_aug = BBoxAugmentation(probability=prob)
+
+    def _maybe_augment_bboxes(self, sample: "TaskSample") -> "TaskSample":
+        """对样本中的归一化 bbox 执行增强（原地副本，不污染原始样本）。"""
+        if getattr(self, "_bbox_aug", None) is None:
+            return sample
+        bboxes = sample.metadata.get("bboxes")
+        if not bboxes:
+            return sample
+        augmented = self._bbox_aug.apply_augmentations(
+            [dict(bb) for bb in bboxes]
+        )
+        new_metadata = dict(sample.metadata)
+        new_metadata["bboxes"] = augmented
+        return TaskSample(
+            task_type=sample.task_type,
+            image_path=sample.image_path,
+            prefix=sample.prefix,
+            suffix=sample.suffix,
+            weight=sample.weight,
+            metadata=new_metadata,
+        )
+
+    def _maybe_augment_text(self, sample: "TaskSample") -> "TaskSample":
+        """对 suffix 执行文本增强（副本，不污染 ``self.samples``）。"""
+        if getattr(self, "_text_aug", None) is None:
+            return sample
+        augmented_suffix = self._text_aug.apply_augmentations(sample.suffix)
+        if augmented_suffix == sample.suffix:
+            return sample
+        return TaskSample(
+            task_type=sample.task_type,
+            image_path=sample.image_path,
+            prefix=sample.prefix,
+            suffix=augmented_suffix,
+            weight=sample.weight,
+            metadata=dict(sample.metadata),
+        )
+
+    def _maybe_augment_image(self, image):
+        """对 PIL 图像执行增强。"""
+        if getattr(self, "_image_aug", None) is None:
+            return image
+        return self._image_aug.apply_augmentations(image)
+
+    def _apply_sample_augmentations(self, sample: "TaskSample") -> "TaskSample":
+        """按 bbox → text 顺序对样本元数据执行增强。"""
+        sample = self._maybe_augment_bboxes(sample)
+        return self._maybe_augment_text(sample)
 
     @property
     def use_cache(self) -> bool:
@@ -302,8 +366,8 @@ class MultiTaskDataset(Dataset):
             # 无法加载缓存，返回原始格式（需要上层处理）
             return dataset_encoding.unencoded_sample_dict(self._get_sample(idx))
 
-        sample = self._get_sample(idx)
-        image = _load_image_cached(sample.image_path)
+        sample = self._apply_sample_augmentations(self._get_sample(idx))
+        image = self._maybe_augment_image(_load_image_cached(sample.image_path))
 
         if self.processor is not None:
             result = dataset_encoding.encode_training_sample(

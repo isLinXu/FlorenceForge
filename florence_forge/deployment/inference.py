@@ -7,11 +7,14 @@ import time
 import threading
 from pathlib import Path
 from queue import Queue, Empty
-from typing import Union, Optional, Callable, List, Dict, Any, Tuple
+from typing import Union, Optional, Callable, List, Dict, Any, Tuple, TYPE_CHECKING
 
 import numpy as np
 import torch
 import torch.nn as nn
+
+if TYPE_CHECKING:  # pragma: no cover - typing-only import
+    import PIL
 
 from .inference_loading import InferenceModelLoader, resolve_device
 from . import inference_parsing as parsing

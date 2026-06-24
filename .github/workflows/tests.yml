@@ -75,7 +75,7 @@ jobs:
             --cov=florence_forge \
             --cov-report=term-missing \
             --cov-report=xml \
-            --cov-fail-under=45
+            --cov-fail-under=56
 
       - name: Upload coverage to Codecov
         if: matrix.python-version == '3.11'

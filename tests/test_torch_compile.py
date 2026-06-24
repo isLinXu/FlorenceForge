@@ -2,7 +2,6 @@
 
 import logging
 
-import torch
 import torch.nn as nn
 
 import florence_forge.utils.torch_compile as compile_mod

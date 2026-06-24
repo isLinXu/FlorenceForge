@@ -14,7 +14,6 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from .structured_vp_decoder import (
     StructuredVisualPrimitiveDecoder,
-    labels_match,
     resolve_structured_vp_filter_caps,
 )
 from .visual_primitive_parser import VisualPrimitiveParser

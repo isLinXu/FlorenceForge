@@ -8,11 +8,8 @@ _compile_model）已在 BaseVLMBackend 中实现，此文件仅保留 PaliGemma 
 模型加载和任务映射逻辑。
 """
 
-import os
-import torch
 import logging
-from typing import Optional, Dict, Any, List, Union
-from pathlib import Path
+from typing import Dict, Any
 
 try:
     from transformers import AutoProcessor, PaliGemmaForConditionalGeneration
@@ -54,7 +51,7 @@ class PaliGemmaBackend(BaseVLMBackend):
     def __init__(self, config: Any):
         """初始化"""
         super().__init__(config)
-        logger.info(f"PaliGemmaBackend 已初始化（模型未加载，请调用 backend.load()）")
+        logger.info("PaliGemmaBackend 已初始化（模型未加载，请调用 backend.load()）")
 
     # ------------------------------------------------------------------
     # 1. 模型加载（PaliGemma 特有逻辑）

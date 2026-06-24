@@ -288,7 +288,6 @@ def evaluate_consistency(text: str, num_rounds: int = 1) -> float:
 
     phases = extract_all_phases(text)
     all_act_texts = phases.get("act", [])
-    all_verify_texts = phases.get("verify", [])
 
     if len(all_act_texts) < 2:
         return 1.0

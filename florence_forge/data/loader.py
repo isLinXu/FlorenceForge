@@ -5,15 +5,15 @@
 
 import torch
 import os
-from torch.utils.data import DataLoader, Sampler, DistributedSampler
+from torch.utils.data import DataLoader, Sampler
 import random
 import logging
 import numpy as np
-from typing import Optional, List, Iterator, Callable, Dict, Any
+from typing import Optional, Iterator, Dict, Any
 from collections import defaultdict, deque
 
 from .dataset import MultiTaskDataset
-from .collate import Florence2Collator, collate_fn
+from .collate import Florence2Collator
 from ..core.config import DataConfig
 
 logger = logging.getLogger(__name__)

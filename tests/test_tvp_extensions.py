@@ -13,7 +13,6 @@ Covers:
 from __future__ import annotations
 
 import json
-import math
 import tempfile
 from pathlib import Path
 
@@ -357,7 +356,7 @@ class TestSpatialReasoningConverter:
 
             assert output_path.exists()
             with open(output_path) as f:
-                lines = [json.loads(l) for l in f if l.strip()]
+                lines = [json.loads(line) for line in f if line.strip()]
 
             assert len(lines) == 1
             assert lines[0]["base_task"] == "spatial"

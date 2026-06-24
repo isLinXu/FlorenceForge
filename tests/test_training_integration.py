@@ -5,7 +5,7 @@
 import pytest
 import tempfile
 from pathlib import Path
-from unittest.mock import Mock, MagicMock, patch
+from unittest.mock import MagicMock
 import torch
 import torch.nn as nn
 
@@ -544,7 +544,7 @@ class TestIntegration:
         """测试完整训练工作流"""
         # 1. 设备配置
         device_config = DeviceConfigurator(training_config)
-        device = device_config.setup_device()
+        device_config.setup_device()
         
         # 2. 梯度检查点
         grad_optimizer = GradientCheckpointOptimizer(

@@ -4,9 +4,6 @@
 及状态保存/恢复功能。
 """
 
-import pytest
-import numpy as np
-from unittest.mock import MagicMock
 
 from florence_forge.core.config import TaskSchedulingConfig
 from florence_forge.training.scheduler import TaskScheduler

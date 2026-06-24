@@ -10,12 +10,10 @@
 import os
 import pytest
 import torch
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
 
 from florence_forge.data.loader import (
     DistributedTaskSampler,
-    TaskBalancedSampler,
-    TaskRoundRobinSampler,
     TaskDataLoader,
 )
 from florence_forge.core.config import DataConfig, DistributedConfig, TrainingConfig

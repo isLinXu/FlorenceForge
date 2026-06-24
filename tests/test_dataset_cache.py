@@ -8,11 +8,11 @@ import json
 import tempfile
 import pickle
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import torch
 
-from florence_forge.data.dataset import MultiTaskDataset, TaskSample
+from florence_forge.data.dataset import MultiTaskDataset
 from florence_forge.core.config import DataConfig
 
 
@@ -332,7 +332,7 @@ class TestDatasetCache:
     def test_getitem_without_processor(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             data_path = self._create_dummy_jsonl(tmpdir, n_samples=1)
-            img_dir = self._create_dummy_images(tmpdir, n_samples=1)
+            self._create_dummy_images(tmpdir, n_samples=1)
             cfg = DataConfig()
             dataset = MultiTaskDataset(
                 data_configs=[{"task_type": "CAPTION", "data_path": str(data_path), "weight": 1.0}],

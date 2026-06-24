@@ -30,8 +30,8 @@ try:
     )
     from florence_forge.core.model import Florence2MultiTaskModel
     from florence_forge.data.builder import DatasetBuilder
-    from florence_forge.data.dataset import MultiTaskDataset, TaskSample
-    from florence_forge.training.trainer import MultiTaskTrainer
+    from florence_forge.data.dataset import MultiTaskDataset, TaskSample  # noqa: F401
+    from florence_forge.training.trainer import MultiTaskTrainer  # noqa: F401
     from florence_forge.utils.device import get_device_info, get_optimal_device
     from florence_forge.utils.logging import setup_logging
     from florence_forge.utils.memory import clear_cache, get_memory_usage
@@ -129,8 +129,8 @@ class ValidationSuite:
             
             # 测试默认配置
             model_config = ModelConfig()
-            training_config = TrainingConfig()
-            data_config = DataConfig()
+            training_config = TrainingConfig()  # noqa: F841
+            data_config = DataConfig()  # noqa: F841
             lora_config = LoRAConfig()
             
             # 测试配置转换

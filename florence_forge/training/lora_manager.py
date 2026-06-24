@@ -566,7 +566,7 @@ class LoRAManager:
         Returns:
             是否需要清理内存
         """
-        current_memory = get_memory_usage()
+        get_memory_usage()
         
         # 检查GPU内存使用
         if torch.cuda.is_available():

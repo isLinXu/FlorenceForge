@@ -77,7 +77,7 @@ def download_coco128(data_dir: Path) -> Path:
     
     # 下载数据集 - 尝试多个镜像源
     zip_path = data_dir / "coco128.zip"
-    logger.info(f"开始下载 COCO128 数据集...")
+    logger.info("开始下载 COCO128 数据集...")
     
     download_success = False
     for i, url in enumerate(COCO128_MIRRORS):
