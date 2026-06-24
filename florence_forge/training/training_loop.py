@@ -4,6 +4,7 @@
 """
 import logging
 import time
+from contextlib import nullcontext
 from typing import Dict, Any, Optional, Tuple, List, Callable
 from collections import defaultdict
 
@@ -143,6 +144,7 @@ class TrainingLoop:
                 continue
 
             accelerator_handles_accumulation = self._accelerator_handles_accumulation()
+            skip_optimizer_step = False
             
             with self.accelerator.accumulate(self.model) if self.accelerator else torch.enable_grad():
                 outputs = self.model(**model_inputs)
@@ -158,22 +160,21 @@ class TrainingLoop:
                         batch_idx,
                         loss.detach().float().mean().item(),
                     )
-                    optimizer.zero_grad()
-                    continue
-                
-                # 原生 PyTorch 路径需要手动缩放；Accelerate 会在 backward 中处理。
-                if not accelerator_handles_accumulation and self.config.gradient_accumulation_steps > 1:
-                    loss = loss / self.config.gradient_accumulation_steps
-                
-                # 反向传播
-                if self.accelerator:
-                    self.accelerator.backward(loss)
+                    skip_optimizer_step = True
                 else:
-                    loss.backward()
+                    # 原生 PyTorch 路径需要手动缩放；Accelerate 会在 backward 中处理。
+                    if not accelerator_handles_accumulation and self.config.gradient_accumulation_steps > 1:
+                        loss = loss / self.config.gradient_accumulation_steps
+                    
+                    # 反向传播
+                    if self.accelerator:
+                        self.accelerator.backward(loss)
+                    else:
+                        loss.backward()
                 
                 # 梯度验证（调试用）
                 gradient_valid = True
-                if gradient_validator and batch_idx % 10 == 0:
+                if not skip_optimizer_step and gradient_validator and batch_idx % 10 == 0:
                     try:
                         if hasattr(gradient_validator, "validate_gradients"):
                             gradient_valid, _ = gradient_validator.validate_gradients(self.global_step)
@@ -192,8 +193,9 @@ class TrainingLoop:
                     if accelerator_handles_accumulation
                     else (batch_idx + 1) % self.config.gradient_accumulation_steps == 0
                 )
-                if not gradient_valid:
-                    optimizer.zero_grad()
+                if skip_optimizer_step or not gradient_valid:
+                    if should_step:
+                        optimizer.zero_grad()
                 elif should_step:
                     if self.config.max_grad_norm > 0:
                         if self.accelerator:
@@ -211,6 +213,9 @@ class TrainingLoop:
                     if lr_scheduler is not None:
                         lr_scheduler.step()
                     optimizer.zero_grad()
+            
+            if skip_optimizer_step:
+                continue
             
             # 统计指标
             actual_loss = (
@@ -347,8 +352,14 @@ class TrainingLoop:
                 if model_inputs.get("labels") is None:
                     logger.warning("Batch %s has no labels; skipping validation step", batch_idx)
                     continue
-                
-                outputs = self.model(**model_inputs)
+
+                autocast_ctx = (
+                    self.accelerator.autocast()
+                    if self.accelerator is not None
+                    else nullcontext()
+                )
+                with autocast_ctx:
+                    outputs = self.model(**model_inputs)
                 loss = outputs.loss if hasattr(outputs, 'loss') else outputs['loss']
                 
                 # 统计指标

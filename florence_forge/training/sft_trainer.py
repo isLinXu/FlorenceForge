@@ -24,6 +24,8 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
+from ..utils.torch_serialization import safe_torch_load
+
 logger = logging.getLogger(__name__)
 
 try:
@@ -371,7 +373,11 @@ class SFTTrainer:
         """Resume training from *directory*."""
         state_path = Path(directory) / "trainer_state.pt"
         if state_path.exists():
-            state = torch.load(state_path, map_location=self.device)
+            state = safe_torch_load(
+                state_path,
+                map_location=self.device,
+                context="SFT trainer state",
+            )
             self.optimizer.load_state_dict(state["optimizer_state_dict"])
             self.global_step = state.get("global_step", 0)
             self.best_eval_loss = state.get("best_eval_loss", float("inf"))

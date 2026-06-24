@@ -5,11 +5,11 @@
 
 import json
 import logging
+import re
 from pathlib import Path
-from typing import Dict, Any, Optional, Union, List
+from typing import Dict, Any, Optional, Union
 
 import torch
-import torch.nn as nn
 from peft import PeftModel, get_peft_model_state_dict
 from transformers import AutoTokenizer, AutoProcessor
 
@@ -234,6 +234,20 @@ class ModelMerger:
         except Exception as e:
             logger.error(f"多适配器合并失败: {e}")
             raise
+
+    @staticmethod
+    def apply_weight_delta(
+        model: torch.nn.Module,
+        weight_deltas: Dict[str, torch.Tensor],
+        scaling_factor: float = 1.0,
+    ) -> None:
+        """将扁平权重增量合并进模型 state dict（单测与简单合并路径）。"""
+        state = model.state_dict()
+        for key, delta in weight_deltas.items():
+            if key not in state:
+                continue
+            state[key] = state[key] + delta * scaling_factor
+        model.load_state_dict(state)
     
     def _create_merged_model(
         self,
@@ -273,172 +287,51 @@ class ModelMerger:
             # 加载基础权重
             merged_model.model.load_state_dict(base_state_dict, strict=False)
             
-            # 合并LoRA权重
-            if merge_strategy == "linear":
-                self._linear_merge(merged_model, lora_weights)
-            elif merge_strategy == "weighted":
-                self._weighted_merge(merged_model, lora_weights)
-            else:
-                raise ValueError(f"不支持的合并策略: {merge_strategy}")
+            # 合并LoRA权重（内联实现，替代旧的 _linear_merge / _weighted_merge）
+            merged_state = merged_model.model.state_dict()
+            merged_count = 0
             
-            logger.info(f"模型合并完成，策略: {merge_strategy}")
+            lora_pairs: Dict[str, Dict[str, torch.Tensor]] = {}
+            for key, tensor in lora_weights.items():
+                # 解析 PEFT 键名: base_model.model.xxx.lora_A/B.weight
+                match = re.match(r'^(?:base_model\.)?(?:model\.)?(.*)\.lora_(A|B)\.weight$', key)
+                if match:
+                    base_key = f"{match.group(1)}.weight"
+                    lora_type = match.group(2)
+                    lora_pairs.setdefault(base_key, {})[lora_type] = tensor
+            
+            # 尝试从 peft_config 获取正确的 scaling 因子
+            scaling = 1.0
+            if hasattr(base_model.model, 'peft_config') and base_model.model.peft_config:
+                first_cfg = next(iter(base_model.model.peft_config.values()))
+                if hasattr(first_cfg, 'r') and hasattr(first_cfg, 'lora_alpha'):
+                    r = first_cfg.r
+                    lora_alpha = first_cfg.lora_alpha
+                    if r > 0:
+                        scaling = lora_alpha / r
+            
+            for base_key, pair in lora_pairs.items():
+                if base_key not in merged_state:
+                    logger.debug(f"合并跳过（基础模型无对应键）: {base_key}")
+                    continue
+                if "A" not in pair or "B" not in pair:
+                    logger.debug(f"合并跳过（缺少 A/B 配对）: {base_key}")
+                    continue
+                delta = pair["B"] @ pair["A"] * scaling
+                merged_state[base_key] = merged_state[base_key] + delta
+                merged_count += 1
+            
+            if merged_count == 0:
+                logger.warning("合并未匹配任何LoRA权重，建议检查键名格式")
+            else:
+                logger.info(f"模型合并完成，策略: {merge_strategy}，合并了 {merged_count} 个权重")
+            
+            merged_model.model.load_state_dict(merged_state, strict=False)
             return merged_model
             
         except Exception as e:
             logger.error(f"创建合并模型失败: {e}")
             raise
-    
-    @staticmethod
-    def _resolve_base_key(lora_key: str) -> Optional[str]:
-        """将 PEFT LoRA 键名映射回基础模型键名。
-
-        PEFT 键名格式示例::
-
-            base_model.model.encoder.layers.0.self_attn.q_proj.lora_A.weight
-            base_model.model.encoder.layers.0.self_attn.q_proj.lora_B.weight
-
-        需要映射到::
-
-            encoder.layers.0.self_attn.q_proj.weight
-
-        规则:
-        1. 去掉 ``base_model.model.`` 前缀
-        2. 去掉 ``.lora_A`` / ``.lora_B`` / ``.lora_dropout`` 等后缀
-        3. 将 ``.weight`` 附加回去
-        """
-        key = lora_key
-        # 去掉 PEFT 包装前缀
-        for prefix in ("base_model.model.", "base_model.model."):
-            if key.startswith(prefix):
-                key = key[len(prefix):]
-                break
-
-        # 识别并提取 lora_A / lora_B 分量
-        import re
-        match = re.match(r"(.+?)\.lora_([AB])\.weight$", key)
-        if not match:
-            return None  # 不是标准 LoRA 键，跳过
-        base_key = match.group(1)
-        # base_key 现在是如 "encoder.layers.0.self_attn.q_proj"
-        return f"{base_key}.weight"
-
-    def _linear_merge(
-        self,
-        model: Florence2MultiTaskModel,
-        lora_weights: Dict[str, torch.Tensor]
-    ) -> None:
-        """线性合并LoRA权重
-
-        支持两种输入格式:
-        1. PEFT 格式 (含 .lora_A./.lora_B.): delta = B @ A
-        2. 简单格式 (直接键名如 'weight'): 直接加到对应参数上
-        """
-        # 先尝试简单格式：直接键名匹配模型参数
-        model_state = model.state_dict()
-        merged_count = 0
-
-        for key, delta_tensor in lora_weights.items():
-            # 简单格式：key 直接对应模型参数名
-            if key in model_state and ".lora_" not in key:
-                if model_state[key].shape == delta_tensor.shape:
-                    model_state[key] = model_state[key] + delta_tensor
-                    merged_count += 1
-                    continue
-
-        # 如果简单格式已匹配，跳过 PEFT 格式
-        if merged_count > 0:
-            logger.info(f"线性合并完成（简单格式），合并了 {merged_count} 个权重")
-            model.load_state_dict(model_state)
-            return
-
-        # PEFT 格式：收集 lora_A / lora_B 配对
-        lora_pairs: Dict[str, Dict[str, torch.Tensor]] = {}
-        for key, tensor in lora_weights.items():
-            base_key = self._resolve_base_key(key)
-            if base_key is None:
-                continue
-            if ".lora_A." in key:
-                lora_pairs.setdefault(base_key, {})["A"] = tensor
-            elif ".lora_B." in key:
-                lora_pairs.setdefault(base_key, {})["B"] = tensor
-
-        for base_key, pair in lora_pairs.items():
-            if base_key not in model_state:
-                logger.debug(f"线性合并跳过（基础模型无对应键）: {base_key}")
-                continue
-            if "A" not in pair or "B" not in pair:
-                logger.debug(f"线性合并跳过（缺少 A/B 配对）: {base_key}")
-                continue
-            delta = pair["B"] @ pair["A"]
-            model_state[base_key] = model_state[base_key] + delta
-            merged_count += 1
-
-        if merged_count == 0:
-            logger.warning(
-                "线性合并未合并任何权重——LoRA 键名与基础模型不匹配。"
-                "建议使用 peft 内置的 merge_and_unload() 代替手动合并。"
-            )
-        else:
-            logger.info(f"线性合并完成，合并了 {merged_count} 个权重")
-        model.load_state_dict(model_state)
-
-    def _weighted_merge(
-        self,
-        model: Florence2MultiTaskModel,
-        lora_weights: Dict[str, torch.Tensor],
-        scaling_factor: float = 1.0,
-    ) -> None:
-        """加权合并LoRA权重
-
-        与 _linear_merge 相同的键名解析逻辑，但支持多适配器加权累加。
-        scaling_factor 缩放 delta 后再加到基础权重上。
-        """
-        # 先尝试简单格式
-        model_state = model.state_dict()
-        merged_count = 0
-
-        for key, delta_tensor in lora_weights.items():
-            if key in model_state and ".lora_" not in key:
-                if model_state[key].shape == delta_tensor.shape:
-                    model_state[key] = model_state[key] + delta_tensor * scaling_factor
-                    merged_count += 1
-                    continue
-
-        if merged_count > 0:
-            logger.info(f"加权合并完成（简单格式, scale={scaling_factor}），合并了 {merged_count} 个权重")
-            model.load_state_dict(model_state)
-            return
-
-        # PEFT 格式
-        lora_pairs: Dict[str, Dict[str, torch.Tensor]] = {}
-        for key, tensor in lora_weights.items():
-            base_key = self._resolve_base_key(key)
-            if base_key is None:
-                continue
-            if ".lora_A." in key:
-                lora_pairs.setdefault(base_key, {})["A"] = tensor
-            elif ".lora_B." in key:
-                lora_pairs.setdefault(base_key, {})["B"] = tensor
-
-        for base_key, pair in lora_pairs.items():
-            if base_key not in model_state:
-                logger.debug(f"加权合并跳过（基础模型无对应键）: {base_key}")
-                continue
-            if "A" not in pair or "B" not in pair:
-                logger.debug(f"加权合并跳过（缺少 A/B 配对）: {base_key}")
-                continue
-            delta = pair["B"] @ pair["A"] * scaling_factor
-            model_state[base_key] = model_state[base_key] + delta
-            merged_count += 1
-
-        if merged_count == 0:
-            logger.warning(
-                "加权合并未合并任何权重——LoRA 键名与基础模型不匹配。"
-                "建议使用 peft 内置的 merge_and_unload() 代替手动合并。"
-            )
-        else:
-            logger.info(f"加权合并完成（scale={scaling_factor}），合并了 {merged_count} 个权重")
-        model.load_state_dict(model_state)
     
     def export_merged_model(
         self,
@@ -515,7 +408,7 @@ class ModelMerger:
     ) -> None:
         """导出ONNX格式"""
         try:
-            import onnx
+            import onnx  # noqa: F401
             
             logger.warning("ONNX导出对Florence2MultiTaskModel可能不完全支持")
             
