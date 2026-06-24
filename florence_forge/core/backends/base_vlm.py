@@ -8,7 +8,6 @@ BaseVLMBackend — 所有 VLM 后端的统一基类
 from __future__ import annotations
 
 import logging
-import warnings
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, ClassVar, Dict, List, Optional, Type, Union

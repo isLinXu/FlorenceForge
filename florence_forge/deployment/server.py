@@ -9,6 +9,7 @@
 import json
 import logging
 import time
+import os
 import base64
 import io
 from typing import Union, List, Dict, Any, Optional
@@ -156,7 +157,7 @@ class ModelServer:
         # 添加CORS中间件
         self.app.add_middleware(
             CORSMiddleware,
-            allow_origins=["*"],
+            allow_origins=self._resolve_cors_origins(None),
             allow_credentials=True,
             allow_methods=["*"],
             allow_headers=["*"],
@@ -175,6 +176,24 @@ class ModelServer:
         self._setup_routes()
         
         logger.info(f"模型服务器初始化完成: {host}:{port}")
+    
+    @staticmethod
+    def _resolve_cors_origins(config_origins: Optional[Union[str, List[str]]]) -> List[str]:
+        """解析 CORS 允许的来源列表。
+
+        优先级：显式参数 > 环境变量 ``FLORENCE_CORS_ORIGINS`` > 默认 localhost。
+        永不返回 ``["*"]``（通配符），以保证 ``allow_credentials=True`` 的安全性。
+        """
+        if config_origins:
+            if isinstance(config_origins, str):
+                return [o.strip() for o in config_origins.split(",") if o.strip()]
+            return list(config_origins)
+
+        env_val = os.environ.get("FLORENCE_CORS_ORIGINS", "")
+        if env_val:
+            return [o.strip() for o in env_val.split(",") if o.strip()]
+
+        return ["http://127.0.0.1:3000", "http://localhost:3000"]
     
     def _setup_routes(self):
         """设置API路由"""
