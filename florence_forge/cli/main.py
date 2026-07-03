@@ -41,6 +41,7 @@ import yaml
 from datetime import datetime
 
 from florence_forge.utils.diagnostics import DEFAULT_MODEL_ID, collect_environment_diagnostics
+from florence_forge.utils.console import cli_print
 
 # 设置基础日志
 logging.basicConfig(
@@ -73,10 +74,10 @@ from .commands import (  # noqa: E402
 def _print_doctor_report(report: Dict[str, Any]) -> None:
     """Print a concise human-readable environment diagnostic report."""
     status = "OK" if report["ok"] else "ISSUES"
-    print(f"\n=== Florence Forge Doctor: {status} ===")
+    cli_print(f"\n=== Florence Forge Doctor: {status} ===")
 
     platform_info = report["platform"]
-    print(
+    cli_print(
         "Platform: "
         f"Python {platform_info['python']} / "
         f"{platform_info['system']} {platform_info['release']} / "
@@ -84,13 +85,13 @@ def _print_doctor_report(report: Dict[str, Any]) -> None:
     )
 
     torch_info = report["torch"]
-    print(
+    cli_print(
         "Torch: "
         f"{torch_info.get('version') or 'missing'} | "
         f"selected={torch_info['selected_device']} "
         f"available={torch_info['selected_device_available']}"
     )
-    print(
+    cli_print(
         "Devices: "
         f"MPS={torch_info['mps_available']} "
         f"(built={torch_info['mps_built']}), "
@@ -100,15 +101,15 @@ def _print_doctor_report(report: Dict[str, Any]) -> None:
 
     model_info = report["model"]
     if model_info["local_snapshot_exists"]:
-        print(f"Model cache: {model_info['local_snapshot']}")
+        cli_print(f"Model cache: {model_info['local_snapshot']}")
     else:
-        print(f"Model cache: missing local snapshot for {model_info['model_id']}")
+        cli_print(f"Model cache: missing local snapshot for {model_info['model_id']}")
 
     missing_required = report.get("missing_required", [])
     if missing_required:
-        print("Missing required deps: " + ", ".join(missing_required))
+        cli_print("Missing required deps: " + ", ".join(missing_required))
     else:
-        print("Required deps: OK")
+        cli_print("Required deps: OK")
 
     optional_missing = [
         dep["package"]
@@ -116,15 +117,27 @@ def _print_doctor_report(report: Dict[str, Any]) -> None:
         if not dep["required"] and not dep["available"]
     ]
     if optional_missing:
-        print("Missing optional deps: " + ", ".join(optional_missing))
+        cli_print("Missing optional deps: " + ", ".join(optional_missing))
 
     if report.get("warnings"):
-        print("Warnings:")
+        cli_print("Warnings:")
         for warning in report["warnings"]:
-            print(f"  - {warning}")
+            cli_print(f"  - {warning}")
 
-    print(f"Recommended dtype: {report['recommended_torch_dtype']}")
-    print(f"Smoke command: {report['suggested_smoke_command']}")
+    cli_print(f"Recommended dtype: {report['recommended_torch_dtype']}")
+    cli_print(f"Smoke command: {report['suggested_smoke_command']}")
+
+    try:
+        from florence_forge.evaluation.advanced_metrics_registry import advanced_metrics_status_report
+        adv = advanced_metrics_status_report()
+        cli_print(
+            f"Advanced metrics: {len(adv['available'])}/{adv['total']} available"
+        )
+        if adv["unavailable"]:
+            for name, reason in adv["unavailable"].items():
+                cli_print(f"  - {name}: {reason}")
+    except Exception as exc:
+        logger.debug("Advanced metrics probe skipped: %s", exc)
 
 
 def run_doctor_task(args) -> bool:
@@ -139,7 +152,7 @@ def run_doctor_task(args) -> bool:
     )
 
     if getattr(args, "json", False):
-        print(json.dumps(report, indent=2, ensure_ascii=False))
+        cli_print(json.dumps(report, indent=2, ensure_ascii=False))
     else:
         _print_doctor_report(report)
 
@@ -153,8 +166,8 @@ def setup_cli_logging(verbose: bool = False) -> None:
 
 def list_available_tasks() -> None:
     """列出所有可用的任务和配置"""
-    print("\n=== Florence Forge 可用任务 ===")
-    print()
+    cli_print("\n=== Florence Forge 可用任务 ===")
+    cli_print()
 
     try:
         from florence_forge.core.tasks import FLORENCE2_TASKS, TaskCategory
@@ -164,7 +177,7 @@ def list_available_tasks() -> None:
         TaskCategory = []
     
     if not FLORENCE2_TASKS:
-        print("\n⚠️  无可用任务列表:")
+        cli_print("\n⚠️  无可用任务列表:")
         predefined_tasks = {
             'CAPTION': '图像描述生成',
             'DETAILED_CAPTION': '详细图像描述',
@@ -191,34 +204,34 @@ def list_available_tasks() -> None:
         }
         
         for category, task_list in categories.items():
-            print(f"\n📂 {category}:")
+            cli_print(f"\n📂 {category}:")
             for task_name in task_list:
                 description = predefined_tasks.get(task_name, '无描述')
-                print(f"  • {task_name}: {description}")
+                cli_print(f"  • {task_name}: {description}")
         
-        print(f"\n总计: {len(predefined_tasks)} 个任务")
+        cli_print(f"\n总计: {len(predefined_tasks)} 个任务")
     else:
         # 按类别分组显示Florence-2原生任务
-        print("📋 Florence-2 原生任务:")
+        cli_print("📋 Florence-2 原生任务:")
         for category in TaskCategory:
             tasks = [name for name, config in FLORENCE2_TASKS.items() 
                     if config.category == category]
             if tasks:
-                print(f"  {category.value}:")
+                cli_print(f"  {category.value}:")
                 for task in tasks:
                     desc = FLORENCE2_TASKS[task].description
-                    print(f"    - {task}: {desc}")
+                    cli_print(f"    - {task}: {desc}")
     
-    print("\n🎯 预配置训练任务:")
+    cli_print("\n🎯 预配置训练任务:")
     for task_key, description in TASK_DESCRIPTIONS.items():
         config_path = TASK_CONFIG_MAPPING[task_key]
-        print(f"  - {task_key}: {description}")
-        print(f"    配置文件: {config_path}")
+        cli_print(f"  - {task_key}: {description}")
+        cli_print(f"    配置文件: {config_path}")
     
-    print("\n💡 使用示例:")
-    print("  florence_forge_cli train --task caption")
-    print("  florence_forge_cli train --task detection --epochs 10")
-    print("  florence_forge_cli train --config custom_config.yaml")
+    cli_print("\n💡 使用示例:")
+    cli_print("  florence_forge_cli train --task caption")
+    cli_print("  florence_forge_cli train --task detection --epochs 10")
+    cli_print("  florence_forge_cli train --config custom_config.yaml")
 
 def validate_config(config_path: str) -> bool:
     """验证配置文件"""
@@ -1168,12 +1181,12 @@ def eval_command():
 
 def info_command():
     """信息命令入口点"""
-    print("\n=== Florence Forge 信息 ===")
-    print("版本: 1.0.0")
-    print("描述: Florence-2多任务微调库")
-    print("GitHub: https://github.com/florenceforge/florence-forge")
-    print("文档: https://florenceforge.readthedocs.io")
-    print("\n使用 'florence_forge_cli --help' 查看完整帮助")
+    cli_print("\n=== Florence Forge 信息 ===")
+    cli_print("版本: 1.0.0")
+    cli_print("描述: Florence-2多任务微调库")
+    cli_print("GitHub: https://github.com/florenceforge/florence-forge")
+    cli_print("文档: https://florenceforge.readthedocs.io")
+    cli_print("\n使用 'florence_forge_cli --help' 查看完整帮助")
 
 if __name__ == '__main__':
     main()

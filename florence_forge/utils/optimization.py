@@ -53,7 +53,14 @@ class ModelOptimizer:
         backend: str = "fbgemm"
     ) -> nn.Module:
         """Apply quantization to the model.
-        
+
+        .. deprecated::
+            Prefer :class:`florence_forge.optimization.quantization.ModelQuantizer`,
+            which is the unified quantization entry point (bnb-4bit/8bit, GPTQ,
+            AWQ and dynamic-int8). This method now delegates its ``dynamic`` path
+            to ``ModelQuantizer.quantize_module_dynamic`` and is kept only for
+            backward compatibility.
+
         Args:
             quantization_type: Type of quantization ('dynamic', 'static', 'qat')
             dtype: Quantization data type
@@ -62,14 +69,26 @@ class ModelOptimizer:
         Returns:
             Quantized model
         """
+        import warnings
+
+        warnings.warn(
+            "ModelOptimizer.quantize_model is deprecated; use "
+            "florence_forge.optimization.quantization.ModelQuantizer instead "
+            "(the unified quantization entry point).",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         try:
             original_size = self.get_model_size()
             
             if quantization_type == "dynamic":
-                quantized_model = torch.quantization.quantize_dynamic(
+                # Delegate to the unified quantizer (single source of truth).
+                from ..optimization.quantization import ModelQuantizer
+
+                quantized_model = ModelQuantizer.quantize_module_dynamic(
                     self.model,
-                    {nn.Linear, nn.Conv2d},
-                    dtype=dtype
+                    dtype=dtype,
+                    target_layers={nn.Linear, nn.Conv2d},
                 )
             elif quantization_type == "static":
                 # Prepare model for static quantization
