@@ -28,7 +28,7 @@ from __future__ import annotations
 import logging
 import re
 import warnings
-from typing import Any, Callable, Dict, List, Optional, Pattern, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Pattern, Union
 
 import torch
 import torch.nn as nn
@@ -207,28 +207,6 @@ class MoETrainingAdapter:
         if count == 0:
             return torch.tensor(0.0)
         return loss_weight * total_loss / count
-
-    def forward_hook(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        """供 ``MultiTaskTrainer`` 在 forward 中调用的钩子。
-
-        如果模型已注入 MoE 层，此钩子无需显式调用（MoE 层已嵌入模型前向图）。
-        保留该接口用于未来外挂式 MoE（如 MoE adapter 旁路）。
-        """
-        return hidden_states
-
-    def loss_hook(self, base_loss: torch.Tensor) -> torch.Tensor:
-        """将 MoE 辅助损失叠加到基础损失上。
-
-        Args:
-            base_loss: 主训练损失（如 caption loss / OD loss）
-
-        Returns:
-            总损失 = base_loss + aux_loss + z_loss
-        """
-        if not self._moe_layers:
-            return base_loss
-        total_loss = base_loss + self.get_auxiliary_loss() + self.get_router_z_loss()
-        return total_loss
 
     # ── 验证 / 诊断 ───────────────────────────────────────────────────
 
