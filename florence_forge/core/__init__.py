@@ -12,7 +12,14 @@ from .config import (
     EvaluationConfig,
     DistributedConfig,
 )
-from .tasks import FLORENCE2_TASKS, is_agentic_task, get_agentic_tasks
+from .tasks import (
+    FLORENCE2_TASKS,
+    TaskConfig,
+    is_agentic_task,
+    get_agentic_tasks,
+    register_task,
+    unregister_task,
+)
 from .agentic_tokens import register_agentic_tokens, AGENTIC_SPECIAL_TOKENS
 
 __all__ = [
@@ -26,8 +33,11 @@ __all__ = [
     "EvaluationConfig",
     "DistributedConfig",
     "FLORENCE2_TASKS",
+    "TaskConfig",
     "is_agentic_task",
     "get_agentic_tasks",
+    "register_task",
+    "unregister_task",
     "register_agentic_tokens",
     "AGENTIC_SPECIAL_TOKENS",
 ]
