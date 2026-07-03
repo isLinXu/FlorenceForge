@@ -667,6 +667,46 @@ class MultiTaskDataset(Dataset):
             indices = indices[:max_samples]
         return self.create_subset(indices)
 
+    @classmethod
+    def from_existing(
+        cls,
+        source: "MultiTaskDataset",
+        *,
+        samples: List[TaskSample],
+        sample_index: List[Tuple[str, int, str, float]],
+        offset_cache: Dict[int, Tuple[str, int, int, str, float]],
+    ) -> "MultiTaskDataset":
+        """从已有数据集构造一个共享配置的新实例（子集/视图）。
+
+        这是所有绕过 ``__init__`` 的构造路径的单一事实源。它显式拷贝
+        ``source`` 的配置级属性，并复用与 ``__init__`` 相同的后置初始化
+        （``_build_task_indices`` / ``_init_sample_cache`` / ``_init_augmentation``），
+        因此当 ``__init__`` 新增属性时只需在此处同步一次，避免子集实例出现
+        属性缺失或初始化不一致。
+        """
+        subset = cls.__new__(cls)
+        # 配置级属性（与源共享，不重新加载数据）
+        subset.data_configs = source.data_configs
+        subset.image_base_path = source.image_base_path
+        subset.config = source.config
+        subset.processor = source.processor
+        subset.backend = source.backend
+        subset.lazy_load = source.lazy_load
+        subset.task_weights = source.task_weights.copy()
+        subset.collate_fn = source.collate_fn
+        # 样本数据
+        subset.samples = samples
+        subset._sample_index = sample_index
+        subset._sample_offset_cache = offset_cache
+        subset.task_indices = defaultdict(list)
+        # 复用 __init__ 的后置初始化步骤，保证一致性
+        subset._build_task_indices()
+        subset._init_sample_cache()
+        subset._sample_cache.use_cache = source.use_cache
+        subset._sample_cache.cache_dir = source._sample_cache.cache_dir
+        subset._init_augmentation()
+        return subset
+
     def create_subset(self, indices: List[int]) -> 'MultiTaskDataset':
         """创建子集
 
@@ -683,32 +723,18 @@ class MultiTaskDataset(Dataset):
                 for new_idx, old_idx in enumerate(indices)
                 if old_idx in self._sample_offset_cache
             }
-            subset_samples = []
+            subset_samples: List[TaskSample] = []
         else:
             subset_samples = [self.samples[i] for i in indices]
             subset_index = []
             subset_offset_cache = {}
 
-        # 创建新的数据集实例
-        subset = MultiTaskDataset.__new__(MultiTaskDataset)
-        subset.data_configs = self.data_configs
-        subset.image_base_path = self.image_base_path
-        subset.config = self.config
-        subset.processor = self.processor
-        subset.backend = self.backend
-        subset.lazy_load = self.lazy_load
-        subset.samples = subset_samples
-        subset._sample_index = subset_index
-        subset._sample_offset_cache = subset_offset_cache
-        subset.task_weights = self.task_weights.copy()
-        subset.collate_fn = self.collate_fn
-        subset.task_indices = defaultdict(list)
-        subset._build_task_indices()
-        subset._init_sample_cache()
-        subset._sample_cache.use_cache = self.use_cache
-        subset._sample_cache.cache_dir = self._sample_cache.cache_dir
-
-        return subset
+        return MultiTaskDataset.from_existing(
+            self,
+            samples=subset_samples,
+            sample_index=subset_index,
+            offset_cache=subset_offset_cache,
+        )
 
     @classmethod
     def from_hf_dataset(
