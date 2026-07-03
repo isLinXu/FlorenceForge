@@ -49,6 +49,7 @@ class SparseGate(nn.Module):
 
         self.proj = nn.Linear(d_model, n_heads)
         self.temperature = nn.Parameter(torch.ones(()))
+        self.last_logits: Optional[torch.Tensor] = None
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if x.dim() != 3:
@@ -58,6 +59,7 @@ class SparseGate(nn.Module):
 
         temperature = self.temperature.clamp_min(1e-4)
         logits = self.proj(x) / temperature
+        self.last_logits = logits.detach().clone()
 
         if self.top_k is not None and self.top_k < self.n_heads:
             values, indices = torch.topk(logits, k=self.top_k, dim=-1)
