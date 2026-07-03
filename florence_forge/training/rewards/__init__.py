@@ -1,20 +1,22 @@
-"""Reward models for GRPO / RL — compatibility shim; see rewards/ subpackage."""
+"""GRPO / RL reward models — split from legacy reward_models monolith."""
 
-from .rewards import (
-    AgenticFormatRewardModel,
-    AgenticQualityRewardModel,
-    AgenticSelfCorrectionRewardModel,
+from .accuracy import (
     CountingRewardModel,
     DetectionAccuracyRewardModel,
-    FormatRewardModel,
     MazeRewardModel,
     MixedAccuracyRewardModel,
     PathTracingRewardModel,
-    QualityRewardModel,
     SpatialReasoningRewardModel,
-    build_agentic_reward_models,
-    build_reward_models,
 )
+from .agentic import (
+    AgenticFormatRewardModel,
+    AgenticQualityRewardModel,
+    AgenticSelfCorrectionRewardModel,
+    build_agentic_reward_models,
+)
+from .factory import build_reward_models
+from .format import FormatRewardModel
+from .quality import QualityRewardModel
 
 __all__ = [
     "FormatRewardModel",

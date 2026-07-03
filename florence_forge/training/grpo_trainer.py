@@ -87,6 +87,28 @@ class GRPOTrainer:
     # Rollout generation
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _repeat_for_group(value: Any, group_size: int, batch_size: int) -> Any:
+        """Repeat a per-prompt tensor ``group_size`` times along the batch dim.
+
+        Uses ``repeat_interleave`` so that the G rollouts of prompt ``i`` are
+        contiguous (``[i*G, (i+1)*G)``), matching the group layout expected by
+        the reward/advantage computation. Non-tensors and tensors whose batch
+        dim does not match ``batch_size`` are returned unchanged.
+        """
+        if isinstance(value, torch.Tensor) and value.shape[0] == batch_size:
+            return value.repeat_interleave(group_size, dim=0)
+        return value
+
+    def _expand_kwargs_for_group(
+        self, batch_size: int, kwargs: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Repeat tensor-valued extra kwargs to match ``batch_size * group_size``."""
+        return {
+            k: self._repeat_for_group(v, self.group_size, batch_size)
+            for k, v in kwargs.items()
+        }
+
     @torch.no_grad()
     def _generate_rollouts(
         self,
@@ -96,9 +118,17 @@ class GRPOTrainer:
         max_new_tokens: int = 512,
         **kwargs,
     ) -> List[str]:
-        """Generate group_size rollouts for the given prompts."""
+        """Generate ``group_size`` rollouts per prompt in a single batched call.
 
-        all_texts: List[str] = []
+        Instead of issuing ``group_size`` sequential ``generate()`` calls (which
+        keeps GPU utilization low and serializes the rollouts), the prompts are
+        repeated ``group_size`` times along the batch dimension and decoded in
+        one batched forward. Output order is ``[p0g0, p0g1, ..., p0g(G-1),
+        p1g0, ...]`` so that ``view(batch_size, group_size)`` groups the G
+        rollouts of the same prompt together.
+        """
+
+        batch_size = input_ids.shape[0]
         was_training = self.model.training
         original_use_cache = getattr(self.model.config, 'use_cache', None) if hasattr(self.model, 'config') else None
 
@@ -106,30 +136,33 @@ class GRPOTrainer:
         if hasattr(self.model, 'config'):
             self.model.config.use_cache = True
 
+        input_ids_rep = input_ids.repeat_interleave(self.group_size, dim=0)
+        attention_mask_rep = attention_mask.repeat_interleave(self.group_size, dim=0)
+        pixel_values_rep = self._repeat_for_group(pixel_values, self.group_size, batch_size)
+        kwargs_rep = self._expand_kwargs_for_group(batch_size, kwargs)
+
         try:
-            for _ in range(self.group_size):
-                outputs = self.model.generate(
-                    pixel_values=pixel_values,
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
-                    max_new_tokens=max_new_tokens,
-                    do_sample=True,
-                    temperature=0.9,
-                    top_p=0.95,
-                    pad_token_id=self.tokenizer.pad_token_id,
-                    eos_token_id=self.tokenizer.eos_token_id,
-                    **kwargs,
-                )
-                new_tokens = outputs[:, input_ids.shape[1]:]
-                texts = self.tokenizer.batch_decode(new_tokens, skip_special_tokens=False)
-                all_texts.extend(texts)
+            outputs = self.model.generate(
+                pixel_values=pixel_values_rep,
+                input_ids=input_ids_rep,
+                attention_mask=attention_mask_rep,
+                max_new_tokens=max_new_tokens,
+                do_sample=True,
+                temperature=0.9,
+                top_p=0.95,
+                pad_token_id=self.tokenizer.pad_token_id,
+                eos_token_id=self.tokenizer.eos_token_id,
+                **kwargs_rep,
+            )
+            new_tokens = outputs[:, input_ids_rep.shape[1]:]
+            all_texts = self.tokenizer.batch_decode(new_tokens, skip_special_tokens=False)
         finally:
             if was_training:
                 self.model.train()
             if original_use_cache is not None and hasattr(self.model, 'config'):
                 self.model.config.use_cache = original_use_cache
 
-        return all_texts
+        return list(all_texts)
 
     # ------------------------------------------------------------------
     # Reward computation
@@ -249,28 +282,22 @@ class GRPOTrainer:
 
         prompt_len = input_ids.shape[1]
 
-        # 5. Compute log probs for current and reference policy
-        seq_log_probs_list = []
-        ref_seq_log_probs_list = []
-        old_seq_log_probs_list = []
+        # Repeat per-prompt inputs to match the (batch_size * group_size) rows
+        # of ``full_ids`` so log-probs can be computed in a single batched pass.
+        pixel_values_rep = self._repeat_for_group(pixel_values, self.group_size, batch_size)
+        kwargs_rep = self._expand_kwargs_for_group(batch_size, kwargs)
 
-        for i in range(full_ids.shape[0]):
-            lp = self._compute_log_probs(
-                self.model, pixel_values, full_ids[i:i+1], full_mask[i:i+1],
-                prompt_len=prompt_len, **kwargs
+        # 5. Compute log probs for current and reference policy (batched)
+        seq_log_probs = self._compute_log_probs(
+            self.model, pixel_values_rep, full_ids, full_mask,
+            prompt_len=prompt_len, **kwargs_rep,
+        )
+        with torch.no_grad():
+            ref_seq_log_probs = self._compute_log_probs(
+                self.ref_model, pixel_values_rep, full_ids, full_mask,
+                prompt_len=prompt_len, **kwargs_rep,
             )
-            seq_log_probs_list.append(lp)
-            with torch.no_grad():
-                ref_lp = self._compute_log_probs(
-                    self.ref_model, pixel_values, full_ids[i:i+1], full_mask[i:i+1],
-                    prompt_len=prompt_len, **kwargs
-                )
-                ref_seq_log_probs_list.append(ref_lp)
-                old_seq_log_probs_list.append(lp.detach())
-
-        seq_log_probs = torch.cat(seq_log_probs_list)
-        ref_seq_log_probs = torch.cat(ref_seq_log_probs_list)
-        old_seq_log_probs = torch.cat(old_seq_log_probs_list)
+        old_seq_log_probs = seq_log_probs.detach()
 
         # 6. KL penalty
         kl_div = seq_log_probs - ref_seq_log_probs
@@ -338,3 +365,34 @@ class GRPOTrainer:
             pbar.set_postfix({k: f"{v / count:.4f}" for k, v in stats.items()})
 
         return {k: v / max(count, 1) for k, v in stats.items()}
+
+    def train(
+        self,
+        dataloader: DataLoader,
+        num_epochs: int = 1,
+        max_new_tokens: int = 512,
+    ) -> Dict[str, Any]:
+        """Run the full multi-epoch GRPO training (unified entrypoint).
+
+        Mirrors :meth:`SFTTrainer.train` and :meth:`OPDTrainer.train` so all
+        three TVP stages expose a consistent ``train()`` interface; per-epoch
+        work is delegated to :meth:`train_epoch`.
+
+        Returns:
+            ``{"train_loss", "epochs": {epoch_i: stats}, "total_epochs"}``.
+        """
+        epoch_results: Dict[str, Any] = {}
+        losses: List[float] = []
+        for epoch in range(num_epochs):
+            stats = self.train_epoch(
+                dataloader=dataloader,
+                max_new_tokens=max_new_tokens,
+                epoch=epoch,
+            )
+            epoch_results[f"epoch_{epoch}"] = stats
+            losses.append(float(stats.get("loss", 0.0)))
+        return {
+            "train_loss": sum(losses) / max(len(losses), 1),
+            "epochs": epoch_results,
+            "total_epochs": num_epochs,
+        }

@@ -5,7 +5,7 @@
 import logging
 import time
 from contextlib import nullcontext
-from typing import Dict, Any, Optional, Tuple, List, Callable
+from typing import TYPE_CHECKING, Dict, Any, Optional, Tuple, List, Callable
 from collections import defaultdict
 
 import torch
@@ -19,6 +19,10 @@ from ..utils.training_logging import (
     resolve_total_steps,
     should_log_step,
 )
+
+if TYPE_CHECKING:  # pragma: no cover - typing-only imports
+    from ._accelerator_compat import Accelerator
+    from ..core.callbacks import CallbackManager
 
 logger = logging.getLogger(__name__)
 
@@ -40,8 +44,8 @@ class TrainingLoop:
         self,
         model: nn.Module,
         config: TrainingConfig,
-        accelerator=None,
-        callback_manager=None
+        accelerator: Optional["Accelerator"] = None,
+        callback_manager: Optional["CallbackManager"] = None,
     ):
         """初始化训练循环
         
@@ -68,6 +72,27 @@ class TrainingLoop:
         
         # Log hooks
         self._log_hooks: List = []
+        
+        # MoE adapter (optional)
+        self._moe_adapter: Optional[Any] = None
+        if getattr(config, "use_moe", False):
+            try:
+                from ..training.moe import MoETrainingAdapter
+                from ..training.moe.moe_config import MoEConfig
+                moe_cfg = MoEConfig(
+                    num_experts=config.moe_num_experts,
+                    top_k=config.moe_top_k,
+                    aux_loss_weight=config.moe_aux_loss_weight,
+                    z_loss_weight=config.moe_z_loss_weight,
+                    capacity_factor=config.moe_capacity_factor,
+                )
+                self._moe_adapter = MoETrainingAdapter(moe_cfg)
+                target_pattern = config.moe_target_layers or r"encoder\.layer\.([0-9]+)"
+                self._moe_adapter.inject_moe_into_model(model, target_layer_pattern=target_pattern)
+                logger.info(f"MoE 已注入模型：{config.moe_num_experts} experts, top_k={config.moe_top_k}")
+            except Exception as exc:
+                logger.warning(f"MoE 注入失败，将继续不使用 MoE 训练: {exc}")
+                self._moe_adapter = None
     
     def train_epoch(
         self,
@@ -149,6 +174,11 @@ class TrainingLoop:
             with self.accelerator.accumulate(self.model) if self.accelerator else torch.enable_grad():
                 outputs = self.model(**model_inputs)
                 loss = outputs.loss if hasattr(outputs, 'loss') else outputs['loss']
+                
+                # 叠加 MoE 辅助损失（如果启用）
+                if self._moe_adapter is not None:
+                    loss = self._moe_adapter.loss_hook(loss)
+                
                 if not torch.isfinite(loss).all():
                     if torch.isnan(loss).any():
                         self._nan_loss_count += 1
@@ -232,6 +262,16 @@ class TrainingLoop:
                 task_losses[task_type] += actual_loss
                 task_samples[task_type] += sample_count
 
+            # MoE 损失统计（供日志和指标使用）
+            moe_aux = 0.0
+            moe_z = 0.0
+            if self._moe_adapter is not None:
+                try:
+                    moe_aux = self._moe_adapter.get_auxiliary_loss().item()
+                    moe_z = self._moe_adapter.get_router_z_loss().item()
+                except Exception:
+                    pass
+
             current_lr = self._get_current_lr(lr_scheduler)
             step_time = time.perf_counter() - step_start_time
             completed_step = self.global_step + 1
@@ -241,28 +281,36 @@ class TrainingLoop:
                 self.config.logging_steps,
                 total_steps,
             ):
+                log_metrics = {
+                    "loss": actual_loss,
+                    "learning_rate": current_lr,
+                    "time_per_step": step_time,
+                }
+                if self._moe_adapter is not None:
+                    log_metrics["moe_aux_loss"] = moe_aux
+                    log_metrics["moe_z_loss"] = moe_z
+                    log_metrics["moe_gini"] = self._moe_adapter.get_routing_gini()
                 logger.info(
                     format_training_step(
                         completed_step=completed_step,
                         total_steps=total_steps,
                         epoch=epoch + 1,
                         total_epochs=self.config.num_epochs,
-                        metrics={
-                            "loss": actual_loss,
-                            "learning_rate": current_lr,
-                            "time_per_step": step_time,
-                        },
+                        metrics=log_metrics,
                         task_type=task_type,
                         elapsed_seconds=time.perf_counter() - self._train_start_time,
                     )
                 )
             
             # 更新进度条
-            progress_bar.set_postfix({
+            progress_bar_postfix = {
                 'loss': f"{actual_loss:.4f}",
                 'lr': f"{current_lr:.2e}",
                 'step_s': f"{step_time:.2f}",
-            })
+            }
+            if self._moe_adapter is not None:
+                progress_bar_postfix['aux'] = f"{moe_aux:.4f}"
+            progress_bar.set_postfix(progress_bar_postfix)
             
             # 触发 batch 结束回调
             if self.callback_manager:
@@ -302,6 +350,14 @@ class TrainingLoop:
             'learning_rate': self._get_current_lr(lr_scheduler),
             **{f'task_{task}_loss': loss for task, loss in task_avg_losses.items()}
         }
+        
+        # MoE 路由统计（如果启用）
+        if self._moe_adapter is not None:
+            try:
+                metrics['moe_gini'] = self._moe_adapter.get_routing_gini()
+                metrics['moe_overflow_tokens'] = self._moe_adapter.get_total_overflow_tokens()
+            except Exception:
+                pass
         
         # 触发 epoch 结束回调
         if self.callback_manager:
