@@ -1,17 +1,15 @@
-"""FlorenceForge指标计算模块 — 兼容层，实现已拆分至 task_metrics/。"""
+"""Task-level metric calculators — split from the legacy metrics monolith."""
 
-from .task_metrics import (
-    COCO_AVAILABLE,
-    CV2_AVAILABLE,
-    ROUGE_AVAILABLE,
+from .base import MetricCalculator
+from .calculators import (
     CaptionMetrics,
     DetectionMetrics,
-    MetricCalculator,
     OCRMetrics,
     SegmentationMetrics,
-    VisualPrimitiveDetectionMetrics,
-    get_metric_calculator,
 )
+from .registry import get_metric_calculator
+from .vp import VisualPrimitiveDetectionMetrics
+from ._deps import COCO_AVAILABLE, CV2_AVAILABLE, ROUGE_AVAILABLE
 
 __all__ = [
     "MetricCalculator",
