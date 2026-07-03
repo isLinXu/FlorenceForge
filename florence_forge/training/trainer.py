@@ -350,7 +350,28 @@ class MultiTaskTrainer:
 
                 self._record_epoch_metrics(epoch, train_metrics, val_metrics)
 
-                is_best = False
+                # MoE 路由统计（epoch 级别诊断）
+                if self.training_loop._moe_adapter is not None:
+                    try:
+                        routing_summary = self.training_loop._moe_adapter.summarize_routing()
+                        gini = self.training_loop._moe_adapter.get_routing_gini()
+                        overflow_tokens = self.training_loop._moe_adapter.get_total_overflow_tokens()
+                        if self._should_emit_console_log():
+                            logger.info(
+                                "[MoE] Epoch %d 路由统计: layers=%d, experts=%d, "
+                                "gini=%.4f, overflow_tokens=%d",
+                                epoch + 1,
+                                routing_summary.get("num_moe_layers", 0),
+                                routing_summary.get("num_experts", 0),
+                                gini,
+                                overflow_tokens,
+                            )
+                        # 将 MoE 指标注入训练指标，供 CSV 和回调使用
+                        train_metrics["moe_gini"] = gini
+                        train_metrics["moe_overflow_tokens"] = overflow_tokens
+                        train_metrics["moe_routing_summary"] = routing_summary
+                    except Exception as exc:
+                        logger.warning("MoE 路由统计收集失败: %s", exc)
                 if val_metrics and "val_loss" in val_metrics:
                     is_best = val_metrics["val_loss"] < self.best_metric
                     if is_best:
