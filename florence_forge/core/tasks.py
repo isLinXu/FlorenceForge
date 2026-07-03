@@ -310,6 +310,83 @@ TVP_TASK_NAMES: tuple = tuple(
     name for name, cfg in FLORENCE2_TASKS.items() if cfg.is_tvp
 )
 
+def _refresh_derived_task_names() -> None:
+    """重建从 ``FLORENCE2_TASKS`` 派生的名称元组。
+
+    ``TVP_TASK_NAMES`` / ``AGENTIC_TASK_NAMES`` 是导入期计算的快照；注册/注销
+    自定义任务后需刷新这两个模块级常量，以便通过 ``tasks.TVP_TASK_NAMES`` 访问
+    时能反映最新状态。（注意：已 ``from tasks import TVP_TASK_NAMES`` 捕获旧引用
+    的调用方不会自动更新——请改为访问 ``tasks.TVP_TASK_NAMES``。）
+    """
+    global TVP_TASK_NAMES, AGENTIC_TASK_NAMES
+    TVP_TASK_NAMES = tuple(
+        name for name, cfg in FLORENCE2_TASKS.items() if cfg.is_tvp
+    )
+    AGENTIC_TASK_NAMES = tuple(
+        name for name, cfg in FLORENCE2_TASKS.items() if cfg.is_agentic
+    )
+
+
+def register_task(
+    name: str,
+    config: "TaskConfig | None" = None,
+    *,
+    overwrite: bool = False,
+    **kwargs: Any,
+) -> TaskConfig:
+    """注册一个自定义任务到全局任务注册表。
+
+    这使 ``FLORENCE2_TASKS`` 从只读的全局字典升级为可扩展的注册表，用户无需
+    修改框架源码即可接入自定义视觉语言任务。
+
+    Args:
+        name: 任务名称（唯一键，惯例为大写下划线，如 ``"MY_TASK"``）。
+        config: 直接提供的 ``TaskConfig`` 实例；若为 ``None``，则用 ``kwargs``
+            构造一个（至少需要 ``prompt``/``category``/``description``）。
+        overwrite: 当同名任务已存在时是否覆盖。默认 ``False`` 会抛出
+            ``ValueError`` 以避免误覆盖内置任务。
+        **kwargs: 当 ``config is None`` 时传给 ``TaskConfig`` 的字段。
+
+    Returns:
+        已注册的 ``TaskConfig`` 实例。
+
+    Raises:
+        ValueError: 名称非法、已存在且未 ``overwrite``，或参数不足。
+    """
+    if not isinstance(name, str) or not name:
+        raise ValueError("任务名称必须是非空字符串")
+    if name in FLORENCE2_TASKS and not overwrite:
+        raise ValueError(
+            f"任务 {name!r} 已存在；如需覆盖请传入 overwrite=True"
+        )
+    if config is None:
+        try:
+            config = TaskConfig(**kwargs)
+        except Exception as exc:  # pydantic ValidationError 等
+            raise ValueError(f"无法从参数构造 TaskConfig: {exc}") from exc
+    elif not isinstance(config, TaskConfig):
+        raise ValueError(f"config 必须是 TaskConfig 实例，得到 {type(config).__name__}")
+
+    FLORENCE2_TASKS[name] = config
+    _refresh_derived_task_names()
+    return config
+
+
+def unregister_task(name: str) -> None:
+    """从注册表移除一个任务。
+
+    Args:
+        name: 要移除的任务名称。
+
+    Raises:
+        KeyError: 任务不存在。
+    """
+    if name not in FLORENCE2_TASKS:
+        raise KeyError(f"未知任务类型: {name}")
+    del FLORENCE2_TASKS[name]
+    _refresh_derived_task_names()
+
+
 def get_tasks_by_category(category: TaskCategory) -> Dict[str, TaskConfig]:
     """根据类别获取任务
     
