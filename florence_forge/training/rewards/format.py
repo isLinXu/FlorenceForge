@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import math
 import re
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Tuple
 
-import torch
 
 from ...core.visual_primitives import COORDINATE_MAX
 
