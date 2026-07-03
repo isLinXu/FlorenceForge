@@ -61,17 +61,21 @@ repos:
       # - id: ruff-format
 
   # ---------------------------------------------------------------------------
-  # 类型检查 —— mypy（仅在显式开启时跑，避免 pre-commit 太慢）
+  # 类型检查 —— mypy（轻量模式：仅 florence_forge/，跳过缺失 stub 的第三方库）
   # ---------------------------------------------------------------------------
-  # 默认不在每次 commit 跑 mypy，仅在 CI 跑；如需本地启用，取消下方注释：
-  # - repo: https://github.com/pre-commit/mirrors-mypy
-  #   rev: v1.10.0
-  #   hooks:
-  #     - id: mypy
-  #       args: [--config-file=pyproject.toml]
-  #       additional_dependencies:
-  #         - types-PyYAML
-  #         - pydantic>=2.4
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.10.0
+    hooks:
+      - id: mypy
+        args:
+          - --config-file=pyproject.toml
+          - --no-error-summary
+        files: ^florence_forge/(evaluation/task_metrics|evaluation/advanced_metrics_registry|evaluation/evaluator_reporting|evaluation/unified_metrics|utils/console|training/rewards)/.*\.py$
+        additional_dependencies:
+          - types-PyYAML
+          - pydantic>=2.4
+          - numpy
+          - torch
 
 ci:
   autofix_commit_msg: "style: auto-fix from pre-commit hooks"
