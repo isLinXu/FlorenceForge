@@ -26,25 +26,16 @@
 - 前向传播时间对比（dense vs sparse）
 - 输出数值一致性（sparse 结果与 dense 结果在 top-k 等价假设下一致）
 
-## Stage 2 — 复杂任务验证（CIFAR-10）
+## Stage 2 — 复杂任务验证（CIFAR-10）✅ 已完成（2026-08-24）
 
-### 目标
-在 CIFAR-10 上对比 Dense / MoE-dense / MoE-sparse / MoE-sparse+aux 四种配置，验证：
-- MoE 在复杂任务上是否优于 Dense
-- aux loss 是否改善专家利用率
-- sparse 计算是否减少训练时间
+### 结果摘要
 
-### 模型架构
-- 输入：CIFAR-10 图像 (32×32×3)
-- 特征提取：轻量 CNN (3 层 Conv)
-- 分类头：Dense 或 MoE 层 → 10 类
-
-### 实验设置
-- 训练 Epochs: 50
-- 批次大小: 128
-- 学习率: 1e-3 (Adam)
-- 专家数: 8, top-k: 2
-- aux_loss_weight: 0.05, z_loss_weight: 0.001
+- 四配置对比完成（subset=10240, 10 epochs, seed=42, MPS）：
+  Dense 66.59% / MoE-dense 68.44% / MoE-sparse 37.89% / MoE-sparse+aux 45.50%
+- MoE-dense 以 +9% 参数换 +1.85pp 精度，容量优势成立
+- aux loss（梯度修复后）带来 +7.61pp 精度、Gini 0.625→0.500、活跃专家 3→4
+- 发现：逐专家 Python 循环在 MPS 上慢 13.9×，bmm 化列为 P1 优化
+- 详见 `florence_forge/training/moe/MOE_PROGRESS_REPORT.md` §八
 
 ## Stage 3 — 报告与集成
 
