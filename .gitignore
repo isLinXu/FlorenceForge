@@ -249,3 +249,17 @@ scripts/training/runs/
 # 本地审计/分析快照
 audit_report*.md
 *.session.json
+
+# Session & analysis artifacts
+.codex_reports/
+.box-desens/
+.analysis_stage*.md
+coverage_baseline.json
+
+# Local data & experiment outputs
+data/
+experiments/
+validation_results/
+
+# Frontend dependencies
+node_modules/

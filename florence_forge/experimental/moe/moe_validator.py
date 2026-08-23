@@ -27,5 +27,7 @@ class MoEValidator:
             expected_gate_shape = (*x.shape[:2], self.moe_layer.num_experts)
             if gate_weights.shape != expected_gate_shape:
                 return False
+            # 若启用容量因子，溢出 token 的权重和可能为 0，因此同时接受 0 和 1
             sums = gate_weights.sum(dim=-1)
-            return torch.allclose(sums, torch.ones_like(sums), atol=1e-5)
+            valid = torch.isclose(sums, torch.ones_like(sums), atol=1e-5) | torch.isclose(sums, torch.zeros_like(sums), atol=1e-5)
+            return bool(valid.all().item())
