@@ -18,7 +18,6 @@ class AgenticFormatRewardModel:
         from ...core.agentic_tokens import (
             AGENTIC_PHASE_TOKENS,
             AGENTIC_PHASE_ORDER,
-            REQUIRED_PHASES,
             extract_all_phases,
             get_phase_order,
             has_required_phases,

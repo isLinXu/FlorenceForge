@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-import math
 import re
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Optional
 
 import torch
 
-from ...core.visual_primitives import COORDINATE_MAX
 
 class QualityRewardModel:
     """LLM-based Generative Reward Model.
