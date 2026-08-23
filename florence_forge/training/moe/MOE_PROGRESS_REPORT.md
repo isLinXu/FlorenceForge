@@ -184,3 +184,48 @@ MoE 模块已完成从 **不可训练的 Tier-3 原型** 到 **可训练、可�
 ---
 
 > **验证方法**: 本报告基于 14 个源码文件的完整代码审查、4 个测试文件的分析、以及 7 项核心算法的独立 Python 运行时验证（全部通过）。所有 claims 均来自实际代码或运行结果，未编造。
+
+---
+
+## 八、CIFAR-10 Benchmark 结果（2026-08-24，plan.md Stage 2 完成）
+
+### 8.1 实验设置
+
+- **脚本**: `scripts/benchmark/moe_cifar10_benchmark.py`（接入 `florence_forge.training.moe` 正式实现，非内联副本）
+- **数据**: CIFAR-10（HF 本地缓存，离线），子采样 10,240 训练样本 / 全量 10,000 测试样本，无随机增强（保证四配置公平可比）
+- **训练**: 10 epochs, batch 128, Adam lr=1e-3, seed=42, Apple MPS
+- **骨干**: 3 层 CNN（共享），分类头按配置替换
+
+### 8.2 结果总表
+
+| 配置 | Best Acc | 训练耗时 | 参数量 | Routing Gini | 活跃专家数 |
+|------|----------|----------|--------|--------------|-----------|
+| Dense 基线 | 66.59% | 16.7s | 228K | — | — |
+| MoE-dense (top-k=全部) | **68.44%** | 231.7s | 248K | 0.871 | 8（但 E5 占 99.3% 权重） |
+| MoE-sparse (top-k=2) | 37.89% | 115.6s | 248K | 0.625 | 3 |
+| MoE-sparse+aux (top-k=2) | **45.50%** | 112.9s | 248K | 0.500 | 4 |
+
+参考点：Dense 基线在全量 50k 样本 / 15 epochs 下达 77.78%（best），本子采样设置用于配置间公平对比。
+
+图表：`experiments/moe_cifar10/results/benchmark_curves.png`（学习曲线）、`benchmark_efficiency.png`（精度/效率/参数量）、`benchmark_expert_load.png`（专家负载分布）。
+
+### 8.3 发现与结论
+
+1. **MoE 容量优势成立**：MoE-dense 以 +9% 参数换取 +1.85pp 精度（68.44% vs 66.59%）。
+2. **aux loss 有效性得到实证**：修复梯度断连后（见 8.4），sparse+aux 相比纯 sparse **精度 +7.61pp、Gini 0.625→0.500、活跃专家 3→4**，三项指标同向改善。
+3. **路由塌陷在小规模场景仍然严重**：所有 MoE 配置都出现明显的专家集中（dense 模式 E5 占 99.3% 权重）。单 token（seq=1）+ 小数据 + 10 epochs 的设置下 aux loss 只能部分缓解。MoE 的优势场景是多 token 大模型，本 benchmark 作为冒烟验证成立，但不作为 Tier-1 晋升的充分证据。
+4. **性能瓶颈已定位**：MoE-dense 比 Dense 慢 13.9×（231.7s vs 16.7s），瓶颈是 `MoELayer.forward` 中逐专家 Python 循环在 MPS 上的 kernel launch 开销（每个专家调用仅处理 ~128×k/8 个 token 的微小张量）。**建议**：dense 路径改用单次 `einsum`/批量矩阵乘，sparse 路径按专家聚合 token 后批量计算（P1 优化项）。
+
+### 8.4 同期修复：aux/z-loss 梯度断连（commit `3b60d39`）
+
+Benchmark 前发现 `MoELayer`/`SparseGate` 仅保存 `.detach()` 的统计副本，导致 aux loss 与 z-loss **数值真实但梯度为零**——门控参数永远无法被负载均衡目标塑造。修复方式：训练模式下保留带计算图的 `_gate_weights_for_loss` / `_logits_for_loss`，adapter 优先使用；eval/no_grad 路径保持无图。新增 3 个回归测试（aux 梯度流、z-loss 梯度流、eval 断连），`tests/experimental/` 41 个测试全部通过。
+
+### 8.5 成熟度更新
+
+| 维度 | 07-02 | 08-24 | 依据 |
+|------|-------|-------|------|
+| 核心算法实现 | 7.5 | 8.5 | aux/z-loss 梯度通路修复，损失真正可训练 |
+| 端到端验证 | 2.0 | 5.0 | CIFAR-10 四配置 benchmark 完成，结论明确 |
+| 训练集成 | 5.0 | 6.0 | MoECallback 落地（commit `c9cd0d1`），诊断指标可注入训练日志 |
+| 性能效率 | — | 3.0 | MPS 上 13.9× 减速已定位，bmm 化优化待做 |
+| **MoE 子系统综合** | 6.2 | **6.8** | Tier-2 候选巩固；Tier-1 晋升需真实多 GPU EP + 更大规模任务验证 |
