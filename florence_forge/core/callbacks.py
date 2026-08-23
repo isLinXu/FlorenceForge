@@ -567,6 +567,79 @@ class MonitoringCallback(TrainerCallback):
 
 
 # ---------------------------------------------------------------------------
+# MoE 诊断回调
+# ---------------------------------------------------------------------------
+
+
+class MoECallback(TrainerCallback):
+    """MoE 诊断回调——在 epoch / train 结束时收集 MoE 路由统计并注入 logs。
+
+    指标来源为 ``florence_forge.training.moe.MoETrainingAdapter``，但本类
+    通过鸭子类型访问（不硬 import），避免 core 层依赖 training 层。
+
+    Adapter 解析顺序：
+        1. ``trainer.training_loop._moe_adapter``（v2 训练栈）
+        2. ``trainer.moe_adapter``（v1 / 直接挂载）
+
+    注入 logs 的指标：
+        - ``moe_gini``：专家路由基尼系数（负载均衡度，越小越均衡）
+        - ``moe_overflow_tokens``：容量因子截断的溢出 token 总数
+        - ``moe_num_layers``：已注入的 MoE 层数
+        - ``moe_num_experts``：每层专家数
+    """
+
+    def __init__(self, log_frequency: int = 1):
+        """初始化 MoE 诊断回调
+
+        Args:
+            log_frequency: 每多少个 epoch 注入一次指标（默认每个 epoch）
+        """
+        self.log_frequency = max(1, int(log_frequency))
+        self.logger = logging.getLogger(__name__ + ".MoECallback")
+
+    @staticmethod
+    def _resolve_adapter(trainer):
+        """按优先级解析 MoE adapter，找不到时返回 None。"""
+        training_loop = getattr(trainer, "training_loop", None)
+        adapter = getattr(training_loop, "_moe_adapter", None)
+        if adapter is None:
+            adapter = getattr(trainer, "moe_adapter", None)
+        return adapter
+
+    def _collect_metrics(self, adapter) -> Optional[Dict[str, Any]]:
+        """从 adapter 收集 MoE 指标；adapter 缺失或未注入时返回 None。"""
+        if adapter is None or not adapter.is_injected():
+            return None
+        moe_layers = getattr(adapter, "_moe_layers", [])
+        metrics: Dict[str, Any] = {
+            "moe_gini": float(adapter.get_routing_gini()),
+            "moe_overflow_tokens": int(adapter.get_total_overflow_tokens()),
+            "moe_num_layers": len(moe_layers),
+        }
+        if moe_layers:
+            metrics["moe_num_experts"] = int(getattr(moe_layers[0], "num_experts", 0))
+        return metrics
+
+    def on_epoch_end(self, trainer, epoch, logs=None):
+        if logs is None or (epoch + 1) % self.log_frequency != 0:
+            return
+        try:
+            metrics = self._collect_metrics(self._resolve_adapter(trainer))
+            if metrics:
+                logs.update(metrics)
+        except Exception as e:  # pragma: no cover - 防御性
+            self.logger.warning(f"MoECallback: 收集 MoE 指标失败: {e}")
+
+    def on_train_end(self, trainer, config):
+        try:
+            metrics = self._collect_metrics(self._resolve_adapter(trainer))
+            if metrics:
+                self.logger.info(f"MoE 最终路由统计: {metrics}")
+        except Exception as e:  # pragma: no cover - 防御性
+            self.logger.warning(f"MoECallback: 记录最终 MoE 统计失败: {e}")
+
+
+# ---------------------------------------------------------------------------
 # 便捷工厂函数
 # ---------------------------------------------------------------------------
 
@@ -617,5 +690,9 @@ def create_default_callbacks(config, monitor=None) -> List[TrainerCallback]:
     elif getattr(config, "use_tensorboard", True):
         # 向后兼容：没有 monitor 时使用独立的 TensorBoardCallback
         callbacks.append(TensorBoardCallback())
+
+    # MoE 诊断（仅当配置启用 MoE 时）
+    if getattr(config, "use_moe", False):
+        callbacks.append(MoECallback())
 
     return callbacks

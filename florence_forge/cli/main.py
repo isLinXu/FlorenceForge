@@ -152,7 +152,8 @@ def run_doctor_task(args) -> bool:
     )
 
     if getattr(args, "json", False):
-        cli_print(json.dumps(report, indent=2, ensure_ascii=False))
+        # soft_wrap=True：禁止 Rich 按终端宽度软换行，保证 JSON 输出始终可解析
+        cli_print(json.dumps(report, indent=2, ensure_ascii=False), soft_wrap=True)
     else:
         _print_doctor_report(report)
 
