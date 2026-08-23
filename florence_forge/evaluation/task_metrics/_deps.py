@@ -15,7 +15,7 @@ except ImportError:
     )
 
 try:
-    import cv2
+    import cv2  # noqa: F401
     CV2_AVAILABLE = True
 except ImportError:
     CV2_AVAILABLE = False
