@@ -271,5 +271,26 @@ FlorenceForge 是面向视觉语言模型（VLM）的多任务微调、评估与
 
 ---
 
+## 附录：Phase 0 执行记录（2026-08-23 完成）
+
+本报告 §五 Phase 0 的全部 5 项止损动作已于 2026-08-23 执行完毕，结果如下：
+
+| # | 动作 | 结果 | 提交 |
+|---|------|------|------|
+| 1 | 提交全部未跟踪新模块（93 文件，+16,746 行） | ✅ 完成 | `cb9b0fc` |
+| 2 | 恢复 `core/` 目录（14 文件） | ✅ 包恢复可导入，后端注册表 10 个别名正常 | `cb9b0fc`（删除从未入库，工作区直接恢复） |
+| 3 | 修复 19 个 ruff 错误 | ✅ `ruff check` 全量通过（15 自动 + 4 手动） | `fc468b3` |
+| 4 | 全量 pytest 回归 | ✅ **1,172 passed / 10 skipped / 0 failed**（skip 均为 CUDA 依赖，macOS 预期行为） | `c9cd0d1` |
+| 5 | 收敛 MoE 双目录 | ✅ 删除 `experimental/moe/`，全部引用已指向 `training/moe/`，文档串同步更新 | `fc468b3` |
+
+**执行中额外发现并修复的 2 个缺陷**：
+
+1. **`MoECallback` 缺失**（测试先行、实现未写）：`tests/experimental/test_moe_callback.py`（9 个测试）期望 `core/callbacks.py` 提供 `MoECallback` 与 `create_default_callbacks` 的 `use_moe` 集成。已在 `core/callbacks.py` 补齐实现——鸭子类型访问 `MoETrainingAdapter`（不引入 core→training 硬依赖），注入 `moe_gini` / `moe_overflow_tokens` / `moe_num_layers` / `moe_num_experts` 四项指标。
+2. **`doctor --json` 输出被 Rich 软换行破坏**：`run_doctor_task` 经 `cli_print`（Rich Console）输出 JSON，长行被按终端宽度折行导致 `json.loads` 失败。已通过 `soft_wrap=True` 修复。
+
+**Phase 0 后状态**：仓库回到"可安装、可导入、可测试、lint 零错误"的健康基线，且 MoE Tier-2、rewards 拆分、task_metrics 注册表、WebUI 双路径等 Phase 1 成果全部安全入库。成熟度评估由"工作区阻塞"恢复至 **4.2/5.0**（HEAD 4.1 + MoECallback/JSON 修复 + MoE 收敛）。下一步进入 Phase 1：MoE CIFAR-10 benchmark、v2 训练栈默认化、Agentic 性能基准。
+
+---
+
 > **报告生成方法**: 基于全量源码结构勘察、git 历史与工作区状态分析、`ruff check` 实测、`pytest --collect-only` 实测、包导入实测、历史报告（06-05/06-18/06-20/06-23/06-24 五份）与 audit_report.md、MOE_PROGRESS_REPORT.md 继承整合。所有量化数据来自当前工具执行结果，未编造。
-> **版本**: 2026-08-22 v5.0
+> **版本**: 2026-08-22 v5.0（附录更新于 2026-08-23）
