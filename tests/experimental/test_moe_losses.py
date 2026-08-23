@@ -81,7 +81,16 @@ def test_loss_hook_combines_base_and_aux():
     base_loss = torch.tensor(2.0)
     total = adapter.loss_hook(base_loss)
     assert total.item() > base_loss.item()
-    assert total.requires_grad == base_loss.requires_grad
+    # 训练模式下 aux/z-loss 携带计算图，total 应可反向传播（梯度经 P_i 流向门控）
+    assert total.requires_grad
+
+    # 纯数值场景（eval + no_grad）：loss_hook 不应引入梯度
+    moe.eval()
+    with torch.no_grad():
+        _ = moe(x)
+    base_loss_plain = torch.tensor(2.0)
+    total_plain = adapter.loss_hook(base_loss_plain)
+    assert total_plain.requires_grad == base_loss_plain.requires_grad
 
 
 def test_moe_layer_sparse_forward_matches_dense_computation():
@@ -151,3 +160,59 @@ def test_moe_layer_hard_routing_gradient_flow():
     assert moe.gate.proj.weight.grad is not None
     # 梯度不应全为 0
     assert moe.gate.proj.weight.grad.abs().sum() > 0
+
+
+def test_aux_loss_gradient_flows_to_gate():
+    """训练模式下 aux loss 的梯度必须能回传到门控参数（回归：曾为 detach 断连）。"""
+    torch.manual_seed(42)
+    moe = MoELayer(num_experts=4, d_model=8, d_state=8, top_k=2, capacity_factor=None)
+    moe.train()
+    x = torch.randn(2, 3, 8)
+    _ = moe(x)
+
+    config = MoEConfig(num_experts=4, d_model=8, d_state=8, top_k=2)
+    adapter = MoETrainingAdapter(config)
+    adapter._moe_layers = [moe]
+
+    aux = adapter.get_auxiliary_loss(loss_weight=0.1)
+    assert aux.requires_grad, "aux loss 在训练模式下必须携带计算图"
+    aux.backward()
+    assert moe.gate.proj.weight.grad is not None
+    assert moe.gate.proj.weight.grad.abs().sum() > 0
+
+
+def test_router_z_loss_gradient_flows_to_gate():
+    """训练模式下 z-loss 的梯度必须能回传到门控参数（回归：曾为 detach 断连）。"""
+    torch.manual_seed(42)
+    moe = MoELayer(num_experts=4, d_model=8, d_state=8, top_k=2, capacity_factor=None)
+    moe.train()
+    x = torch.randn(2, 3, 8)
+    _ = moe(x)
+
+    config = MoEConfig(num_experts=4, d_model=8, d_state=8, top_k=2)
+    adapter = MoETrainingAdapter(config)
+    adapter._moe_layers = [moe]
+
+    z = adapter.get_router_z_loss(loss_weight=0.01)
+    assert z.requires_grad, "z-loss 在训练模式下必须携带计算图"
+    z.backward()
+    assert moe.gate.proj.weight.grad is not None
+    assert moe.gate.proj.weight.grad.abs().sum() > 0
+
+
+def test_aux_loss_detached_in_eval_mode():
+    """推理模式下不保留计算图，aux loss 退化为纯数值（无梯度）。"""
+    torch.manual_seed(42)
+    moe = MoELayer(num_experts=4, d_model=8, d_state=8, top_k=2, capacity_factor=None)
+    moe.eval()
+    with torch.no_grad():
+        x = torch.randn(2, 3, 8)
+        _ = moe(x)
+
+    config = MoEConfig(num_experts=4, d_model=8, d_state=8, top_k=2)
+    adapter = MoETrainingAdapter(config)
+    adapter._moe_layers = [moe]
+
+    assert moe._gate_weights_for_loss is None
+    aux = adapter.get_auxiliary_loss(loss_weight=0.1)
+    assert not aux.requires_grad

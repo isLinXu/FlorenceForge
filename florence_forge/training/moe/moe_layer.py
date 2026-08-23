@@ -53,6 +53,8 @@ class MoELayer(nn.Module):
         )
         self.last_gate_weights: Optional[torch.Tensor] = None
         self._overflow_stats: Optional[torch.Tensor] = None
+        # 训练模式下保留带计算图的 gate 权重供 aux loss 使用（推理时为 None）
+        self._gate_weights_for_loss: Optional[torch.Tensor] = None
 
     @property
     def selective_params(self) -> torch.Tensor:
@@ -134,4 +136,9 @@ class MoELayer(nn.Module):
 
         self.last_gate_weights = gate_weights.detach().clone()
         self._routing_sums = gate_weights.sum(dim=(0, 1)).detach().clone()
+        if self.training and torch.is_grad_enabled():
+            # 保留计算图：aux load-balancing loss 需要经由 P_i 回传梯度到门控
+            self._gate_weights_for_loss = gate_weights
+        else:
+            self._gate_weights_for_loss = None
         return output

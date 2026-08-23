@@ -55,6 +55,8 @@ class SparseGate(nn.Module):
         self.proj = nn.Linear(d_model, n_heads)
         self.temperature = nn.Parameter(torch.ones(()))
         self.last_logits: Optional[torch.Tensor] = None
+        # 训练模式下保留带计算图的 logits 供 router z-loss 使用（推理时为 None）
+        self._logits_for_loss: Optional[torch.Tensor] = None
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if x.dim() != 3:
@@ -67,6 +69,10 @@ class SparseGate(nn.Module):
         temperature = self.temperature.clamp_min(1e-4)
         logits = self.proj(x) / temperature
         self.last_logits = logits.detach().clone()
+        if self.training and torch.is_grad_enabled():
+            self._logits_for_loss = logits
+        else:
+            self._logits_for_loss = None
 
         if self.top_k is not None and self.top_k < self.n_heads:
             values, indices = torch.topk(logits, k=self.top_k, dim=-1)
