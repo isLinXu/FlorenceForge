@@ -166,13 +166,20 @@ class MoETrainingAdapter:
                 continue
 
             num_experts = layer.num_experts
-            # f_i: 分配给专家 i 的 token 比例
+            # f_i: 分配给专家 i 的 token 比例（作为常数处理，无需梯度）
             total_tokens = (
                 layer.last_gate_weights.shape[0] * layer.last_gate_weights.shape[1]
             )
             f = layer._routing_sums / total_tokens
-            # P_i: 路由器对专家 i 的平均门控概率
-            P = layer.last_gate_weights.mean(dim=(0, 1))
+            # P_i: 路由器对专家 i 的平均门控概率——训练时优先使用带计算图的
+            # 权重，保证 aux loss 的梯度可以回传到门控参数（Switch Transformer
+            # 设计中 aux loss 正是通过 P_i 塑造路由分布）
+            gw_for_loss = getattr(layer, "_gate_weights_for_loss", None)
+            P = (
+                gw_for_loss.mean(dim=(0, 1))
+                if gw_for_loss is not None
+                else layer.last_gate_weights.mean(dim=(0, 1))
+            )
             aux = num_experts * torch.sum(f * P)
             total_loss = total_loss + aux
 
@@ -193,10 +200,12 @@ class MoETrainingAdapter:
         count = 0
         for layer in self._moe_layers:
             gate = layer.gate
-            if not hasattr(gate, "last_logits") or gate.last_logits is None:
+            # 训练时优先使用带计算图的 logits，保证 z-loss 梯度可回传
+            logits = getattr(gate, "_logits_for_loss", None)
+            if logits is None:
+                logits = getattr(gate, "last_logits", None)
+            if logits is None:
                 continue
-
-            logits = gate.last_logits
             # log(sum(exp(logits))) 沿专家维度
             log_sum_exp = torch.logsumexp(logits, dim=-1)
             z_loss = (log_sum_exp**2).mean()
