@@ -14,7 +14,7 @@ from florence_forge.core.config import DistributedConfig, TrainingConfig
 from florence_forge.training.device_config import DeviceConfigurator
 
 # 标记需要可选依赖的测试
-pytestmark = [pytest.mark.integration]
+pytestmark = [pytest.mark.integration, pytest.mark.slow]
 
 
 def _has_accelerate() -> bool:

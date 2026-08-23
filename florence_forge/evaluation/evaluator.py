@@ -22,6 +22,13 @@ from ..core.tasks import FLORENCE2_TASKS
 from ..data.collate import Florence2Collator
 from ..data.dataset import MultiTaskDataset
 from .metrics import get_metric_calculator
+from .evaluator_reporting import (
+    compute_overall_metrics,
+    export_bad_cases_to_jsonl,
+    infer_case_score,
+    iter_result_items,
+    save_evaluation_results,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -577,85 +584,21 @@ class MultiTaskEvaluator:
         Returns:
             写入的 JSONL 文件路径
         """
-        output_path = Path(output_dir)
-        output_path.mkdir(parents=True, exist_ok=True)
-        bad_case_path = output_path / filename
-
-        bad_cases = []
-        for sample_id, item in enumerate(self._iter_result_items(results)):
-            score = self._infer_case_score(item)
-            is_bad = bool(item.get("is_bad", False)) or (score is not None and score <= threshold)
-            if not is_bad:
-                continue
-
-            bad_cases.append({
-                "sample_id": item.get("sample_id", sample_id),
-                "task_type": item.get("task_type"),
-                "prediction": item.get("prediction"),
-                "reference": item.get("reference"),
-                "score": score,
-                "threshold": threshold,
-                "metadata": item.get("metadata", {}),
-            })
-
-        with open(bad_case_path, "w", encoding="utf-8") as f:
-            for item in bad_cases:
-                f.write(json.dumps(item, ensure_ascii=False, default=str) + "\n")
-
-        logger.info(f"已导出 {len(bad_cases)} 个 bad case 到: {bad_case_path}")
-        return bad_case_path
+        return export_bad_cases_to_jsonl(
+            results,
+            threshold=threshold,
+            output_dir=output_dir,
+            filename=filename,
+        )
 
     def _iter_result_items(
         self,
         results: Union[List[Dict[str, Any]], Dict[str, Any]],
     ) -> List[Dict[str, Any]]:
-        """将不同评估结果形态规范化为 per-sample 字典列表。"""
-        if isinstance(results, list):
-            return [item for item in results if isinstance(item, dict)]
-
-        if not isinstance(results, dict):
-            return []
-
-        predictions = results.get("predictions")
-        references = results.get("references")
-        if isinstance(predictions, list) and isinstance(references, list):
-            task_type = results.get("task_type")
-            return [
-                {
-                    "sample_id": idx,
-                    "task_type": task_type,
-                    "prediction": pred,
-                    "reference": ref,
-                }
-                for idx, (pred, ref) in enumerate(zip(predictions, references))
-            ]
-
-        items = results.get("items") or results.get("samples") or results.get("bad_cases")
-        if isinstance(items, list):
-            return [item for item in items if isinstance(item, dict)]
-
-        return []
+        return iter_result_items(results)
 
     def _infer_case_score(self, item: Dict[str, Any]) -> Optional[float]:
-        """从样本结果中推断一个用于筛选 bad case 的分数。"""
-        for key in ("score", "metric", "accuracy", "f1", "exact_match"):
-            value = item.get(key)
-            if isinstance(value, (int, float, bool)):
-                return float(value)
-
-        metrics = item.get("metrics")
-        if isinstance(metrics, dict):
-            for key in ("score", "accuracy", "f1", "exact_match", "bleu", "rouge1_f1"):
-                value = metrics.get(key)
-                if isinstance(value, (int, float, bool)):
-                    return float(value)
-
-        prediction = item.get("prediction")
-        reference = item.get("reference")
-        if prediction is not None and reference is not None:
-            return float(str(prediction).strip() == str(reference).strip())
-
-        return None
+        return infer_case_score(item)
     
     def _clean_prediction(self, prediction: str, task_type: str) -> str:
         """清理预测结果（移除 prompt tokens 保留纯答案）
@@ -710,75 +653,15 @@ class MultiTaskEvaluator:
         return cleaned
     
     def _compute_overall_metrics(self, task_metrics: Dict[str, Dict]) -> Dict[str, float]:
-        """计算总体指标
-        
-        Args:
-            task_metrics: 各任务指标
-            
-        Returns:
-            总体指标字典
-        """
-        overall_metrics = {}
-        
-        # 收集所有指标名称
-        all_metric_names = set()
-        for task_data in task_metrics.values():
-            all_metric_names.update(task_data['metrics'].keys())
-        
-        # 计算每个指标的加权平均
-        total_samples = sum(task_data['sample_count'] for task_data in task_metrics.values())
-        
-        for metric_name in all_metric_names:
-            weighted_sum = 0.0
-            valid_tasks = 0
-            
-            for task_type, task_data in task_metrics.items():
-                if metric_name in task_data['metrics']:
-                    metric_value = task_data['metrics'][metric_name]
-                    sample_count = task_data['sample_count']
-                    
-                    if isinstance(metric_value, (int, float)):
-                        weight = sample_count / total_samples
-                        weighted_sum += metric_value * weight
-                        valid_tasks += 1
-            
-            if valid_tasks > 0:
-                overall_metrics[f'avg_{metric_name}'] = weighted_sum
-        
-        # 添加任务数量统计
-        overall_metrics['num_tasks'] = len(task_metrics)
-        overall_metrics['total_samples'] = total_samples
-        
-        return overall_metrics
-    
+        return compute_overall_metrics(task_metrics)
+
     def _save_evaluation_results(
         self,
         results: Dict[str, Any],
         predictions: Dict[str, List[Dict]],
         output_dir: Union[str, Path]
     ) -> None:
-        """保存评估结果
-        
-        Args:
-            results: 评估结果
-            predictions: 预测结果
-            output_dir: 输出目录
-        """
-        output_dir = Path(output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
-        
-        # 保存评估指标
-        with open(output_dir / 'evaluation_metrics.json', 'w', encoding='utf-8') as f:
-            json.dump(results, f, indent=2, ensure_ascii=False, default=str)
-        
-        # 保存预测结果
-        if predictions:
-            for task_type, task_predictions in predictions.items():
-                task_file = output_dir / f'predictions_{task_type}.json'
-                with open(task_file, 'w', encoding='utf-8') as f:
-                    json.dump(task_predictions, f, indent=2, ensure_ascii=False)
-        
-        logger.info(f"评估结果已保存到: {output_dir}")
+        save_evaluation_results(results, predictions, output_dir)
     
     def get_task_performance_summary(self) -> Dict[str, Any]:
         """获取任务性能摘要
