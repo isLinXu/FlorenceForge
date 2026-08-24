@@ -44,7 +44,7 @@ class CaptionMetrics(MetricCalculator):
             def tokenize(text: str) -> List[str]:
                 nonlocal warned_tokenizer_fallback
                 try:
-                    return word_tokenize(text.lower())
+                    return list(word_tokenize(text.lower()))
                 except LookupError:
                     if not warned_tokenizer_fallback:
                         logger.warning(
@@ -62,14 +62,17 @@ class CaptionMetrics(MetricCalculator):
                 score = sentence_bleu(ref_tokens, pred_tokens, smoothing_function=smoothing)
                 bleu_scores.append(score)
 
-            return {"bleu": np.mean(bleu_scores), "bleu_std": np.std(bleu_scores)}
+            return {
+                "bleu": float(np.mean(bleu_scores)),
+                "bleu_std": float(np.std(bleu_scores)),
+            }
 
         except ImportError:
             logger.warning(missing_dependency_message("BLEU计算", "nltk", "evaluation"))
             return {}
 
     def _compute_rouge(self) -> Dict[str, float]:
-        if not ROUGE_AVAILABLE:
+        if not ROUGE_AVAILABLE or rouge_scorer is None:
             return {}
         try:
             scorer = rouge_scorer.RougeScorer(["rouge1", "rouge2", "rougeL"], use_stemmer=True)
@@ -80,7 +83,7 @@ class CaptionMetrics(MetricCalculator):
                     rouge_scores[f"{key}_f1"].append(score.fmeasure)
                     rouge_scores[f"{key}_precision"].append(score.precision)
                     rouge_scores[f"{key}_recall"].append(score.recall)
-            return {key: np.mean(values) for key, values in rouge_scores.items()}
+            return {key: float(np.mean(values)) for key, values in rouge_scores.items()}
         except Exception as e:
             logger.warning(f"ROUGE计算失败: {e}")
             return {}
@@ -97,12 +100,12 @@ class CaptionMetrics(MetricCalculator):
     def _compute_length_stats(self) -> Dict[str, float]:
         pred_lengths = [len(pred.split()) for pred in self.predictions]
         ref_lengths = [len(ref.split()) for ref in self.references]
+        pred_avg = float(np.mean(pred_lengths)) if pred_lengths else 0.0
+        ref_avg = float(np.mean(ref_lengths)) if ref_lengths else 0.0
         return {
-            "pred_avg_length": np.mean(pred_lengths),
-            "ref_avg_length": np.mean(ref_lengths),
-            "length_ratio": (
-                np.mean(pred_lengths) / np.mean(ref_lengths) if np.mean(ref_lengths) > 0 else 0.0
-            ),
+            "pred_avg_length": pred_avg,
+            "ref_avg_length": ref_avg,
+            "length_ratio": pred_avg / ref_avg if ref_avg > 0 else 0.0,
         }
 
 
@@ -149,9 +152,10 @@ class DetectionMetrics(MetricCalculator):
             if text.startswith("[") or text.startswith("{"):
                 data = json.loads(text)
                 if isinstance(data, list):
-                    return data
+                    return list(data)
                 if isinstance(data, dict) and "objects" in data:
-                    return data["objects"]
+                    objects = data["objects"]
+                    return list(objects) if isinstance(objects, list) else []
 
             vp_pattern = (
                 r"<\|?ref\|?>([^<]+)<\|?/ref\|?>\s*<\|?box\|?>\s*\[\[([^\]]*)\]\]\s*<\|?/box\|?>"
@@ -447,7 +451,7 @@ class SegmentationMetrics(MetricCalculator):
         if not coords:
             return np.zeros(image_size, dtype=np.uint8)
         mask = np.zeros(image_size, dtype=np.uint8)
-        cv2.fillPoly(mask, [np.array(coords, dtype=np.int32)], 1)
+        cv2.fillPoly(mask, [np.array(coords, dtype=np.int32)], 1)  # type: ignore[call-overload]
         return mask
 
     def _compute_segmentation_metrics(
@@ -466,7 +470,7 @@ class SegmentationMetrics(MetricCalculator):
                 ious.append(intersection / union)
                 dice_scores.append(2 * intersection / (pred_mask.sum() + ref_mask.sum()))
         return {
-            "mean_iou": np.mean(ious) if ious else 0.0,
-            "mean_dice": np.mean(dice_scores) if dice_scores else 0.0,
-            "num_valid_samples": len(ious),
+            "mean_iou": float(np.mean(ious)) if ious else 0.0,
+            "mean_dice": float(np.mean(dice_scores)) if dice_scores else 0.0,
+            "num_valid_samples": float(len(ious)),
         }
