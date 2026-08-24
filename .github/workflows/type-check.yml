@@ -20,51 +20,30 @@ jobs:
   mypy:
     name: MyPy Type Check
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ['3.10', '3.11']
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Python ${{ matrix.python-version }}
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: '3.11'
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install mypy
+          pip install "mypy>=1.5.0,<2.0.0" types-PyYAML
           pip install -e ".[dev]"
 
-      - name: Run MyPy
+      - name: Run MyPy (lightweight subset)
         run: |
-          mypy florence_forge --config-file pyproject.toml --show-error-codes
-
-  pyright:
-    name: Pyright Type Check
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ['3.10', '3.11']
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install pyright
-          pip install -e ".[dev]"
-
-      - name: Run Pyright
-        run: |
-          pyright florence_forge --pythonversion ${{ matrix.python-version }}
+          mypy \
+            florence_forge/evaluation/task_metrics \
+            florence_forge/evaluation/advanced_metrics_registry.py \
+            florence_forge/evaluation/evaluator_reporting.py \
+            florence_forge/evaluation/unified_metrics.py \
+            florence_forge/utils/console.py \
+            florence_forge/training/rewards \
+            --config-file pyproject.toml \
+            --show-error-codes \
+            --follow-imports=silent

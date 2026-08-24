@@ -1,81 +1,77 @@
 """unified_metrics.py — 统一的指标计算模块
 
-合并 _metrics.py 和 _metrics_calculator.py 为一个模块。
-原有的两个文件分别实现了不同方面的指标计算逻辑：
-- _metrics.py 专注于基础指标的存储和累积
-- _metrics_calculator.py 专注于高级指标的批量计算
-
-本模块提供统一的接口，消除冗余，提高可维护性。
+合并基础指标与高级指标计算，使用 availability registry 避免静默降级。
 """
 
+from __future__ import annotations
+
 import logging
+from typing import Any, Dict, List
+
+from .advanced_metrics_registry import (
+    advanced_metrics_status_report,
+    get_available_advanced_calculators,
+    unavailable_advanced_metrics,
+)
 
 logger = logging.getLogger(__name__)
 
+
 class UnifiedMetrics:
-    """统一指标计算类
+    """统一指标计算类 — 基础 + 高级（Semantic/Efficiency/Robustness）。"""
 
-    合并了基础指标存储和高级指标计算的功能。
-    使用延迟加载避免循环导入。
-    """
-
-    def __init__(self):
+    def __init__(self) -> None:
         self._basic_metrics = None
-        self._advanced_metrics = None
+        self._advanced_registry: Dict[str, Any] | None = None
+        self._availability_logged = False
 
     @property
     def basic_metrics(self):
-        """延迟加载基础指标计算器"""
         if self._basic_metrics is None:
             from .metrics import MetricCalculator
             self._basic_metrics = MetricCalculator("unified")
         return self._basic_metrics
 
     @property
-    def advanced_metrics(self):
-        """延迟加载高级指标计算器"""
-        if self._advanced_metrics is None:
-            try:
-                from .advanced_metrics import (
-                    SemanticMetricsCalculator,
-                    EfficiencyMetricsCalculator,
-                    RobustnessMetricsCalculator,
-                )
-                self._advanced_metrics = {
-                    'semantic': SemanticMetricsCalculator,
-                    'efficiency': EfficiencyMetricsCalculator,
-                    'robustness': RobustnessMetricsCalculator,
-                }
-            except ImportError:
-                self._advanced_metrics = {}
-        return self._advanced_metrics
+    def advanced_metrics(self) -> Dict[str, Any]:
+        if self._advanced_registry is None:
+            self._advanced_registry = get_available_advanced_calculators()
+            if not self._availability_logged:
+                missing = unavailable_advanced_metrics()
+                if missing:
+                    logger.warning(
+                        "高级评估指标不可用（将跳过，不会返回假分数）: %s",
+                        ", ".join(missing),
+                    )
+                self._availability_logged = True
+        return self._advanced_registry
 
-    def compute(self, predictions, references):
-        """计算统一指标
+    def availability_report(self) -> Dict[str, Any]:
+        """Return structured availability status for doctor / benchmark logs."""
+        return advanced_metrics_status_report()
 
-        Args:
-            predictions: 预测结果列表
-            references: 参考结果列表
-
-        Returns:
-            包含所有指标的字典
-        """
-        # 基础指标
+    def compute(
+        self,
+        predictions: List[str],
+        references: List[str],
+    ) -> Dict[str, Any]:
         self.basic_metrics.predictions = predictions
         self.basic_metrics.references = references
-        result = self.basic_metrics.compute()
+        result: Dict[str, Any] = dict(self.basic_metrics.compute())
 
-        # 高级指标（延迟加载）
         for name, calculator_cls in self.advanced_metrics.items():
             try:
                 calculator = calculator_cls()
                 advanced_result = calculator.compute(predictions, references)
-                result.update(advanced_result)
+                if advanced_result:
+                    result.update(advanced_result)
             except Exception as e:
-                logger.warning(f"高级指标 {name} 计算失败: {e}")
+                logger.warning("高级指标 %s 计算失败: %s", name, e)
+
+        if unavailable_advanced_metrics():
+            result["_advanced_metrics_availability"] = advanced_metrics_status_report()
 
         return result
 
 
-# 公开API
-__all__ = ['UnifiedMetrics']
+__all__ = ["UnifiedMetrics"]
