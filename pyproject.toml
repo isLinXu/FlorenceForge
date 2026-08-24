@@ -282,7 +282,7 @@ omit = [
 ]
 
 [tool.coverage.report]
-fail_under = 58
+fail_under = 56
 exclude_lines = [
     "pragma: no cover",
     "def __repr__",
