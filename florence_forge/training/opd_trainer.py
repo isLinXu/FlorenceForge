@@ -254,3 +254,36 @@ class OPDTrainer:
                 torch.save(self.student.state_dict(), epoch_dir / "model.pt")
 
         return {"loss": avg_loss, "kl_loss": avg_kl, "ce_loss": avg_ce}
+
+    def train(
+        self,
+        dataloader: DataLoader,
+        num_epochs: int = 1,
+        save_dir: Optional[Path] = None,
+        save_every: int = 1,
+    ) -> Dict[str, Any]:
+        """Run the full multi-epoch OPD training (unified entrypoint).
+
+        Mirrors :meth:`SFTTrainer.train` and :meth:`GRPOTrainer.train` so all
+        three TVP stages expose a consistent ``train()`` interface; per-epoch
+        work is delegated to :meth:`train_epoch`.
+
+        Returns:
+            ``{"train_loss", "epochs": {epoch_i: stats}, "total_epochs"}``.
+        """
+        epoch_results: Dict[str, Any] = {}
+        losses: List[float] = []
+        for epoch in range(num_epochs):
+            stats = self.train_epoch(
+                dataloader=dataloader,
+                epoch=epoch,
+                save_dir=save_dir,
+                save_every=save_every,
+            )
+            epoch_results[f"epoch_{epoch}"] = stats
+            losses.append(float(stats.get("loss", 0.0)))
+        return {
+            "train_loss": sum(losses) / max(len(losses), 1),
+            "epochs": epoch_results,
+            "total_epochs": num_epochs,
+        }

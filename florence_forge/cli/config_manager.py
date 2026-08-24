@@ -29,6 +29,7 @@ from ..core.config import (
 from ..core.yaml_config import (
     FlorenceForgeYAMLConfig, create_yaml_config_template, validate_yaml_config
 )
+from ..utils.console import cli_print
 
 class ConfigManager:
     """配置管理器"""
@@ -64,7 +65,7 @@ class ConfigManager:
                 output_path = output_path.with_suffix('.json')
             config.save_to_json(output_path)
         
-        print(f"✓ 默认配置已创建: {output_path}")
+        cli_print(f"✓ 默认配置已创建: {output_path}")
     
     def validate_config(self, config_path: str) -> bool:
         """验证配置文件
@@ -79,11 +80,11 @@ class ConfigManager:
             config_path = Path(config_path)
             
             if not config_path.exists():
-                print(f"✗ 配置文件不存在: {config_path}")
+                cli_print(f"✗ 配置文件不存在: {config_path}")
                 return False
             
             if config_path.suffix.lower() not in self.supported_formats:
-                print(f"✗ 不支持的文件格式: {config_path.suffix}")
+                cli_print(f"✗ 不支持的文件格式: {config_path.suffix}")
                 return False
             
             # 尝试加载配置
@@ -109,16 +110,16 @@ class ConfigManager:
                     errors.append("LoRA rank (r) 必须大于 0")
             
             if errors:
-                print("✗ 配置验证失败:")
+                cli_print("✗ 配置验证失败:")
                 for error in errors:
-                    print(f"  - {error}")
+                    cli_print(f"  - {error}")
                 return False
             
-            print(f"✓ 配置验证通过: {config_path}")
+            cli_print(f"✓ 配置验证通过: {config_path}")
             return True
             
         except Exception as e:
-            print(f"✗ 配置验证失败: {e}")
+            cli_print(f"✗ 配置验证失败: {e}")
             return False
     
     def convert_config(self, input_path: str, output_path: str) -> None:
@@ -138,10 +139,10 @@ class ConfigManager:
             # 保存为新格式
             config.save_to_file(output_path)
             
-            print(f"✓ 配置转换完成: {input_path} -> {output_path}")
+            cli_print(f"✓ 配置转换完成: {input_path} -> {output_path}")
             
         except Exception as e:
-            print(f"✗ 配置转换失败: {e}")
+            cli_print(f"✗ 配置转换失败: {e}")
     
     def merge_configs(self, base_config_path: str, override_config_path: str, 
                      output_path: str) -> None:
@@ -176,10 +177,10 @@ class ConfigManager:
             merged_config = TrainingConfig.from_dict(merged_dict)
             merged_config.save_to_file(output_path)
             
-            print(f"✓ 配置合并完成: {output_path}")
+            cli_print(f"✓ 配置合并完成: {output_path}")
             
         except Exception as e:
-            print(f"✗ 配置合并失败: {e}")
+            cli_print(f"✗ 配置合并失败: {e}")
     
     def _deep_merge(self, base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
         """深度合并字典
@@ -211,22 +212,22 @@ class ConfigManager:
             config_path = Path(config_path)
             config = TrainingConfig.load_from_file(config_path)
             
-            print(f"\n配置文件信息: {config_path}")
-            print("=" * 50)
-            print(f"实验名称: {config.experiment_name or 'N/A'}")
-            print(f"运行名称: {config.run_name or 'N/A'}")
-            print(f"模型: {config.model_settings.model_name}")
-            print(f"使用LoRA: {config.model_settings.use_lora}")
+            cli_print(f"\n配置文件信息: {config_path}")
+            cli_print("=" * 50)
+            cli_print(f"实验名称: {config.experiment_name or 'N/A'}")
+            cli_print(f"运行名称: {config.run_name or 'N/A'}")
+            cli_print(f"模型: {config.model_settings.model_name}")
+            cli_print(f"使用LoRA: {config.model_settings.use_lora}")
             if config.model_settings.use_lora:
-                print(f"LoRA Rank: {config.model_settings.lora_config.r}")
-            print(f"训练轮数: {config.num_epochs}")
-            print(f"批次大小: {config.data_settings.batch_size}")
-            print(f"学习率: {config.optimization_settings.learning_rate}")
-            print(f"输出目录: {config.output_dir}")
-            print(f"标签: {', '.join(config.tags) if config.tags else 'N/A'}")
+                cli_print(f"LoRA Rank: {config.model_settings.lora_config.r}")
+            cli_print(f"训练轮数: {config.num_epochs}")
+            cli_print(f"批次大小: {config.data_settings.batch_size}")
+            cli_print(f"学习率: {config.optimization_settings.learning_rate}")
+            cli_print(f"输出目录: {config.output_dir}")
+            cli_print(f"标签: {', '.join(config.tags) if config.tags else 'N/A'}")
             
         except Exception as e:
-            print(f"✗ 无法读取配置信息: {e}")
+            cli_print(f"✗ 无法读取配置信息: {e}")
     
     def create_template(self, template_type: str, output_path: str) -> None:
         """创建配置模板
@@ -238,7 +239,7 @@ class ConfigManager:
         if template_type == 'yaml_multitask':
             # 创建YAML多任务配置模板
             create_yaml_config_template(output_path)
-            print(f"✓ YAML多任务模板已创建: {output_path}")
+            cli_print(f"✓ YAML多任务模板已创建: {output_path}")
             return
             
         if template_type == 'minimal':
@@ -288,7 +289,7 @@ class ConfigManager:
             config = TrainingConfig()
         
         config.save_to_file(output_path)
-        print(f"✓ {template_type} 模板已创建: {output_path}")
+        cli_print(f"✓ {template_type} 模板已创建: {output_path}")
     
     def validate_yaml_config(self, config_path: str) -> bool:
         """验证YAML配置文件
@@ -302,12 +303,12 @@ class ConfigManager:
         try:
             result = validate_yaml_config(config_path)
             if result:
-                print(f"✓ YAML配置验证通过: {config_path}")
+                cli_print(f"✓ YAML配置验证通过: {config_path}")
             else:
-                print(f"✗ YAML配置验证失败: {config_path}")
+                cli_print(f"✗ YAML配置验证失败: {config_path}")
             return result
         except Exception as e:
-            print(f"✗ YAML配置验证失败: {e}")
+            cli_print(f"✗ YAML配置验证失败: {e}")
             return False
     
     def show_yaml_config_info(self, config_path: str) -> None:
@@ -319,44 +320,44 @@ class ConfigManager:
         try:
             yaml_config = FlorenceForgeYAMLConfig.load_from_file(config_path)
             
-            print(f"\nYAML配置文件信息: {config_path}")
-            print("=" * 50)
-            print(f"项目名称: {yaml_config.project_name}")
-            print(f"项目描述: {yaml_config.description}")
-            print(f"实验名称: {yaml_config.experiment_name or 'N/A'}")
-            print(f"启用的任务类型: {', '.join(yaml_config.enabled_tasks)}")
-            print(f"数据集数量: {len(yaml_config.datasets)}")
-            print(f"任务映射数量: {len(yaml_config.task_mappings)}")
-            print(f"输出目录: {yaml_config.output_dir}")
-            print(f"图像基础路径: {yaml_config.image_base_path or 'N/A'}")
+            cli_print(f"\nYAML配置文件信息: {config_path}")
+            cli_print("=" * 50)
+            cli_print(f"项目名称: {yaml_config.project_name}")
+            cli_print(f"项目描述: {yaml_config.description}")
+            cli_print(f"实验名称: {yaml_config.experiment_name or 'N/A'}")
+            cli_print(f"启用的任务类型: {', '.join(yaml_config.enabled_tasks)}")
+            cli_print(f"数据集数量: {len(yaml_config.datasets)}")
+            cli_print(f"任务映射数量: {len(yaml_config.task_mappings)}")
+            cli_print(f"输出目录: {yaml_config.output_dir}")
+            cli_print(f"图像基础路径: {yaml_config.image_base_path or 'N/A'}")
             
             # 显示训练配置信息
             if yaml_config.training:
-                print("\n训练配置:")
+                cli_print("\n训练配置:")
                 training = yaml_config.training
-                print(f"  训练轮数: {training.get('num_epochs', 'N/A')}")
-                print(f"  批次大小: {training.get('batch_size', 'N/A')}")
-                print(f"  学习率: {training.get('learning_rate', 'N/A')}")
-                print(f"  模型名称: {training.get('model_name', 'N/A')}")
-                print(f"  使用LoRA: {training.get('use_lora', 'N/A')}")
+                cli_print(f"  训练轮数: {training.get('num_epochs', 'N/A')}")
+                cli_print(f"  批次大小: {training.get('batch_size', 'N/A')}")
+                cli_print(f"  学习率: {training.get('learning_rate', 'N/A')}")
+                cli_print(f"  模型名称: {training.get('model_name', 'N/A')}")
+                cli_print(f"  使用LoRA: {training.get('use_lora', 'N/A')}")
             
-            print("\n数据集详情:")
+            cli_print("\n数据集详情:")
             for dataset in yaml_config.datasets:
-                print(f"  - {dataset.name}: {dataset.path} ({', '.join(dataset.task_types)})")
+                cli_print(f"  - {dataset.name}: {dataset.path} ({', '.join(dataset.task_types)})")
             
-            print("\n任务映射详情:")
+            cli_print("\n任务映射详情:")
             for mapping in yaml_config.task_mappings:
-                print(f"  - {mapping.task_type}: {len(mapping.datasets)} 个数据集 ({', '.join(mapping.datasets)})")
+                cli_print(f"  - {mapping.task_type}: {len(mapping.datasets)} 个数据集 ({', '.join(mapping.datasets)})")
                 
         except Exception as e:
-            print(f"✗ 无法读取YAML配置信息: {e}")
+            cli_print(f"✗ 无法读取YAML配置信息: {e}")
     
     def list_supported_tasks(self) -> None:
         """列出所有支持的任务类型"""
         from florence_forge.core.tasks import FLORENCE2_TASKS
         
-        print("\n支持的Florence-2任务类型:")
-        print("=" * 50)
+        cli_print("\n支持的Florence-2任务类型:")
+        cli_print("=" * 50)
         
         categories = {}
         
@@ -367,9 +368,9 @@ class ConfigManager:
             categories[category].append((task_name, task_info.description))
         
         for category, task_list in categories.items():
-            print(f"\n{category.upper()}:")
+            cli_print(f"\n{category.upper()}:")
             for task_name, description in task_list:
-                print(f"  - {task_name}: {description}")
+                cli_print(f"  - {task_name}: {description}")
     
     def convert_to_yaml_config(self, training_config_path: str, output_path: str) -> None:
         """将传统训练配置转换为YAML配置
@@ -393,11 +394,11 @@ class ConfigManager:
             # 保存YAML配置
             yaml_config.save_to_file(output_path)
             
-            print(f"✓ 配置转换完成: {training_config_path} -> {output_path}")
-            print("注意: 请手动添加数据集和任务映射配置")
+            cli_print(f"✓ 配置转换完成: {training_config_path} -> {output_path}")
+            cli_print("注意: 请手动添加数据集和任务映射配置")
             
         except Exception as e:
-            print(f"✗ 配置转换失败: {e}")
+            cli_print(f"✗ 配置转换失败: {e}")
 
 def create_parser():
     """创建命令行解析器"""
@@ -522,10 +523,10 @@ def main():
             sys.exit(1)
     
     except KeyboardInterrupt:
-        print("\n操作已取消")
+        cli_print("\n操作已取消")
         sys.exit(1)
     except Exception as e:
-        print(f"✗ 错误: {e}")
+        cli_print(f"✗ 错误: {e}")
         sys.exit(1)
 
 

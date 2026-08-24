@@ -18,7 +18,7 @@ from __future__ import annotations
 import io
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -177,44 +177,25 @@ def register_agentic_routes(app: "FastAPI", inference_backend: Any) -> None:
         )
 
         async def event_generator():
-            # Emit plan event
-            plan = orch.decompose(goal)
-            plan_payload = {
-                "type": "plan",
-                "goal": goal,
-                "sub_tasks": [
-                    {"index": s.index, "intent": s.intent, "goal": s.goal}
-                    for s in plan.sub_tasks
-                ],
-                "rationale": plan.rationale,
-            }
-            yield f"data: {json.dumps(plan_payload, ensure_ascii=False)}\n\n"
-
-            from florence_forge.agentic import AgentState
-
-            agent_state = AgentState()
-            steps: List[Dict[str, Any]] = []
-            for sub in plan.sub_tasks:
-                if len(steps) >= max_steps:
-                    break
-                record = orch._execute_sub_task(pil_img, sub, agent_state)
-                step_dict = {
-                    "sub_task_index": record.sub_task_index,
-                    "intent": record.intent,
-                    "tool_call": record.tool_call.describe(),
-                    "raw_output": record.raw_output[:500],
-                    "verified": record.verified,
-                    "attempts": record.attempts,
-                    "issues": record.issues,
-                }
-                viz = generate_step_visualization(pil_img, step_dict)
-                if viz:
-                    step_dict["visualization"] = viz
-                steps.append(step_dict)
-                yield f"data: {json.dumps({'type': 'step', 'step': step_dict}, ensure_ascii=False)}\n\n"
-
-            final_answer = orch._aggregate(goal, agent_state, steps)
-            yield f"data: {json.dumps({'type': 'done', 'final_answer': final_answer, 'state': agent_state.summarize()}, ensure_ascii=False)}\n\n"
+            # Drive the orchestrator via its public streaming interface so this
+            # endpoint never depends on private methods (_execute_sub_task /
+            # _aggregate), which keeps the HTTP contract stable across
+            # orchestrator refactors.
+            for event in orch.run_stream(image=pil_img, goal=goal):
+                if event.get("type") == "step":
+                    step_dict = event["step"]
+                    # Truncate raw output for streaming display.
+                    if isinstance(step_dict.get("raw_output"), str):
+                        step_dict["raw_output"] = step_dict["raw_output"][:500]
+                    viz = generate_step_visualization(pil_img, step_dict)
+                    if viz:
+                        step_dict["visualization"] = viz
+                    payload = {"type": "step", "step": step_dict}
+                else:
+                    # 'plan' and 'done' events are already JSON-friendly; drop
+                    # any non-serializable live dataclasses defensively.
+                    payload = {k: v for k, v in event.items() if k != "record"}
+                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
         return StreamingResponse(  # type: ignore[return-value]
             event_generator(),

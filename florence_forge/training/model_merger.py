@@ -45,10 +45,12 @@ class ModelMerger:
         """合并LoRA权重到基础模型
         
         Args:
-            base_model: 基础模型（未使用，保留参数以兼容旧接口）
+            base_model: 基础模型（**已弃用/未使用**，保留仅为兼容旧接口）
             lora_model: LoRA模型（PeftModel）
             task_name: 任务名称（用于日志）
-            merge_strategy: 合并策略（单适配器场景由 peft 内置处理）
+            merge_strategy: **已弃用/未使用**。单适配器合并固定由 peft 内置的
+                merge_and_unload() 处理，此参数不产生任何效果。传入非默认值时
+                会记录警告。多适配器加权合并请使用 merge_multiple_adapters()。
             
         Returns:
             合并后的模型
@@ -59,8 +61,15 @@ class ModelMerger:
             旧的手动合并逻辑（_linear_merge/_weighted_merge）键名不匹配，
             会导致静默失败（不报错但不合并权重）。
         """
-        logger.info(f"开始合并LoRA权重，任务: {task_name}, 策略: {merge_strategy}")
-        # 直接使用 peft 内置的正确合并逻辑
+        if merge_strategy != "linear":
+            logger.warning(
+                "merge_strategy=%r 已被忽略：merge_lora_weights 固定使用 peft "
+                "内置的 merge_and_unload()。如需加权合并请改用 "
+                "merge_multiple_adapters()。",
+                merge_strategy,
+            )
+        logger.info(f"开始合并LoRA权重，任务: {task_name}")
+        # 直接使用 peft 内置的正确合并逻辑（base_model / merge_strategy 均不参与）
         return self.merge_and_unload(lora_model)
     
     def merge_and_unload(
@@ -401,6 +410,42 @@ class ModelMerger:
             logger.error(f"模型导出失败: {e}")
             raise
     
+    @staticmethod
+    def _resolve_image_size(model: Any) -> int:
+        """Resolve the expected square input image size from the model config.
+
+        Florence-2 uses 768×768 (base) rather than the 224×224 ImageNet default,
+        so a hard-coded 224 produces dummy inputs that do not match the model and
+        make ONNX/TorchScript export fail or emit an invalid graph. This inspects
+        the model/vision config and processor to derive the correct size, falling
+        back to 768 (Florence-2 default) when nothing is discoverable.
+        """
+        candidates = []
+        cfg = getattr(model, "config", None)
+        if cfg is not None:
+            vision_cfg = getattr(cfg, "vision_config", None)
+            if vision_cfg is not None:
+                candidates.append(getattr(vision_cfg, "image_size", None))
+            candidates.append(getattr(cfg, "image_size", None))
+
+        processor = getattr(model, "processor", None)
+        image_processor = getattr(processor, "image_processor", None) or processor
+        if image_processor is not None:
+            crop = getattr(image_processor, "crop_size", None)
+            if isinstance(crop, dict):
+                candidates.append(crop.get("height") or crop.get("width"))
+            size = getattr(image_processor, "size", None)
+            if isinstance(size, dict):
+                candidates.append(size.get("height") or size.get("shortest_edge"))
+            elif isinstance(size, int):
+                candidates.append(size)
+
+        for value in candidates:
+            if isinstance(value, int) and value > 0:
+                return value
+        logger.warning("无法从模型配置推断 image_size，回退到 Florence-2 默认值 768")
+        return 768
+
     def _export_onnx(
         self,
         model: Florence2MultiTaskModel,
@@ -418,9 +463,10 @@ class ModelMerger:
             else:
                 pytorch_model = model
             
-            # 创建示例输入 - 需要匹配Florence2的输入格式
+            # 创建示例输入 - 需要匹配Florence2的输入格式（图像尺寸从模型配置读取）
+            image_size = self._resolve_image_size(model)
             dummy_input_ids = torch.randint(0, 1000, (1, 10))
-            dummy_pixel_values = torch.randn(1, 3, 224, 224)
+            dummy_pixel_values = torch.randn(1, 3, image_size, image_size)
             
             # 尝试导出ONNX（可能会失败）
             try:
@@ -469,9 +515,10 @@ class ModelMerger:
             else:
                 pytorch_model = model
             
-            # 创建示例输入 - 需要匹配Florence2的输入格式
+            # 创建示例输入 - 需要匹配Florence2的输入格式（图像尺寸从模型配置读取）
+            image_size = self._resolve_image_size(model)
             dummy_input_ids = torch.randint(0, 1000, (1, 10))
-            dummy_pixel_values = torch.randn(1, 3, 224, 224)
+            dummy_pixel_values = torch.randn(1, 3, image_size, image_size)
             
             script_path = output_path / "model.pt"
             

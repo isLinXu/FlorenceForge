@@ -50,11 +50,16 @@ URL = __url__
 from .core.config import TrainingConfig
 from .core.tasks import FLORENCE2_TASKS, TaskCategory
 from .exceptions import (
+    AgenticError,
+    AgenticTimeoutError,
     BackendError,
     ConfigError,
     DataError,
     DeploymentError,
+    EvaluationError,
     FlorenceForgeError,
+    MoEError,
+    QuantizationError,
     SecurityWarning,
     TrainingError,
 )
@@ -88,6 +93,11 @@ __all__ = [
     'TrainingError',
     'BackendError',
     'DeploymentError',
+    'EvaluationError',
+    'AgenticError',
+    'AgenticTimeoutError',
+    'MoEError',
+    'QuantizationError',
     'SecurityWarning',
     'FLORENCE2_TASKS',
     'TaskCategory',
