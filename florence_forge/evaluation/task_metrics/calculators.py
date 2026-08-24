@@ -451,7 +451,7 @@ class SegmentationMetrics(MetricCalculator):
         if not coords:
             return np.zeros(image_size, dtype=np.uint8)
         mask = np.zeros(image_size, dtype=np.uint8)
-        cv2.fillPoly(mask, [np.array(coords, dtype=np.int32)], 1)  # type: ignore[call-overload]
+        cv2.fillPoly(mask, [np.array(coords, dtype=np.int32)], 1)  # type: ignore[call-overload, unused-ignore]
         return mask
 
     def _compute_segmentation_metrics(
