@@ -406,13 +406,13 @@ class MixedAccuracyRewardModel:
         }
         subtask = aliases.get(subtask, subtask)
         if subtask == "counting":
-            return self.counting_rm(text, meta)
+            return float(self.counting_rm(text, meta))
         elif subtask in ("spatial", "vqa"):
-            return self.spatial_rm(text, meta)
+            return float(self.spatial_rm(text, meta))
         elif subtask == "maze":
-            return self.maze_rm(text, meta)
+            return float(self.maze_rm(text, meta))
         elif subtask == "path":
-            return self.path_rm(text, meta)
+            return float(self.path_rm(text, meta))
         elif subtask in ("od", "grounding", "od_vp", "phrase_grounding_vp"):
-            return self.detection_rm(text, meta)
+            return float(self.detection_rm(text, meta))
         return 0.0

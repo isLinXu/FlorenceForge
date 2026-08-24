@@ -75,16 +75,19 @@ class FormatRewardModel:
 
         return max(0.0, score)
 
-    def _parse_all_boxes(self, text: str) -> List[Tuple[int, ...]]:
-        boxes = []
+    def _parse_all_boxes(self, text: str) -> List[Tuple[int, int, int, int]]:
+        boxes: List[Tuple[int, int, int, int]] = []
         for pattern in self._box_patterns:
             for m in pattern.finditer(text):
                 for bm in re.finditer(r"\[(\d+),(\d+),(\d+),(\d+)\]", m.group(1)):
-                    boxes.append(tuple(int(bm.group(i)) for i in range(1, 5)))
+                    boxes.append((
+                        int(bm.group(1)), int(bm.group(2)),
+                        int(bm.group(3)), int(bm.group(4)),
+                    ))
         return boxes
 
-    def _parse_all_points(self, text: str) -> List[Tuple[int, ...]]:
-        points = []
+    def _parse_all_points(self, text: str) -> List[Tuple[int, int]]:
+        points: List[Tuple[int, int]] = []
         for pattern in self._point_patterns:
             for m in pattern.finditer(text):
                 for pm in re.finditer(r"\[(\d+),(\d+)\]", m.group(1)):

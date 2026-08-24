@@ -99,19 +99,23 @@ class AgenticQualityRewardModel:
             "Score: 0.0 (poor), 0.5 (fair), or 1.0 (good). Output only the score.\n\n"
             f"Response:\n{text}\n"
         )
+        judge_model = self.judge_model
+        judge_tokenizer = self.judge_tokenizer
+        if judge_model is None or judge_tokenizer is None:
+            return self._heuristic_score(text)
         try:
-            inputs = self.judge_tokenizer(
+            inputs = judge_tokenizer(
                 prompt, return_tensors="pt", truncation=True, max_length=1024,
             )
-            device = next(self.judge_model.parameters()).device
+            device = next(judge_model.parameters()).device
             inputs = {k: v.to(device) for k, v in inputs.items()}
             with torch.no_grad():
-                outputs = self.judge_model.generate(
+                outputs = judge_model.generate(
                     **inputs, max_new_tokens=8, do_sample=False,
-                    pad_token_id=self.judge_tokenizer.eos_token_id,
+                    pad_token_id=judge_tokenizer.eos_token_id,
                 )
             new_tokens = outputs[:, inputs["input_ids"].shape[1]:]
-            decoded = self.judge_tokenizer.decode(new_tokens[0], skip_special_tokens=True)
+            decoded = judge_tokenizer.decode(new_tokens[0], skip_special_tokens=True)
             return QualityRewardModel._parse_judge_score(decoded)
         except Exception:
             return self._heuristic_score(text)

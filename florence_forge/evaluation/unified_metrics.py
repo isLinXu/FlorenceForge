@@ -54,10 +54,10 @@ class UnifiedMetrics:
         self,
         predictions: List[str],
         references: List[str],
-    ) -> Dict[str, float]:
+    ) -> Dict[str, Any]:
         self.basic_metrics.predictions = predictions
         self.basic_metrics.references = references
-        result = self.basic_metrics.compute()
+        result: Dict[str, Any] = dict(self.basic_metrics.compute())
 
         for name, calculator_cls in self.advanced_metrics.items():
             try:
