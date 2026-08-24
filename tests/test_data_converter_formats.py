@@ -208,6 +208,7 @@ def test_csv_caption_rejects_unknown_task_type(tmp_path):
 
 
 def test_xml_to_florence2_od(tmp_path):
+    pytest.importorskip("defusedxml")
     image_dir = tmp_path / "images"
     image_dir.mkdir(parents=True, exist_ok=True)
     xml_dir = tmp_path / "xml"
