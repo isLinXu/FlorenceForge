@@ -11,10 +11,10 @@
     - VLMBackendRegistry：动态注册表
     - create_backend / auto_select_backend：工厂函数
 
-MoE / SSM 等实验性组件已迁移到 `florence_forge.experimental.moe`，
+MoE / SSM 等组件位于 `florence_forge.training.moe`（Tier-2 候选），
 不会从这里导出。如需使用：
 
-    >>> from florence_forge.experimental.moe import MoELayer  # 实验性 API
+    >>> from florence_forge.training.moe import MoELayer
 """
 
 from .base_vlm import (

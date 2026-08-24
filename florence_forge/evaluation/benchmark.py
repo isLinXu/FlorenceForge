@@ -432,74 +432,6 @@ class BenchmarkEvaluator:
         model_template.eval()
         return model_template
 
-    def _evaluate_datasets_on_gpu(
-        self, datasets: Dict[str, MultiTaskDataset], gpu_id: int, output_path: Path
-    ) -> Dict[str, Any]:
-        """在指定GPU上评估数据集
-
-        注意：此方法运行在 spawn 上下文的子进程中，每个进程拥有独立的 CUDA 上下文。
-        通过 deepcopy state_dict 来避免共享参数访问。
-        """
-        import copy
-
-        # 设置GPU设备
-        device = torch.device(f"cuda:{gpu_id}")
-        torch.cuda.set_device(device)
-
-        # 创建模型副本并移动到指定GPU（使用 deepcopy 避免共享参数）
-        model_ref = self.model
-        if hasattr(self.model, "module"):  # 如果是DDP包装的模型
-            model_ref = self.model.module
-
-        # Deep copy state_dict 并加载到新设备，避免跨 GPU 共享参数
-        try:
-            model_copy = copy.deepcopy(model_ref)
-        except Exception:
-            # deepcopy 可能因自定义对象失败，回退到 state_dict 拷贝
-            model_copy = type(model_ref)(model_ref.config)
-            model_copy.load_state_dict(
-                {k: v.clone() for k, v in model_ref.state_dict().items()}
-            )
-
-        model_copy = model_copy.to(device)
-        model_copy.eval()
-
-        # 创建评估器
-        evaluator = MultiTaskEvaluator(model_copy)
-
-        results = {}
-        for dataset_name, dataset in datasets.items():
-            logger.info(f"GPU {gpu_id} 评估数据集: {dataset_name}")
-
-            # 检查缓存
-            cache_key = self._get_cache_key(
-                dataset_name,
-                "mixed",
-                {
-                    "model_name": getattr(model_copy, "model_name", "Florence2"),
-                    "gpu_id": gpu_id,
-                },
-            )
-
-            cached_result = self._load_cached_results(cache_key)
-            if cached_result:
-                results[dataset_name] = cached_result
-                logger.info(f"GPU {gpu_id} 使用缓存结果: {dataset_name}")
-            else:
-                dataset_result = evaluator.evaluate_dataset(
-                    dataset,
-                    batch_size=self.config.get("batch_size", 8),
-                    num_workers=self.config.get("num_workers", 4),
-                    max_samples_per_task=self.config.get("max_samples_per_task"),
-                    save_predictions=self.config.get("save_predictions", False),
-                    output_dir=output_path / dataset_name,
-                )
-
-                self._save_cached_results(cache_key, dataset_result)
-                results[dataset_name] = dataset_result
-
-        return results
-
     def evaluate_single_task(
         self,
         dataset: MultiTaskDataset,
@@ -741,10 +673,22 @@ class BenchmarkEvaluator:
     def _filter_task_dataset(
         self, dataset: MultiTaskDataset, task_type: str
     ) -> MultiTaskDataset:
-        """筛选特定任务的数据集"""
-        # 这里简化实现，实际应该创建新的数据集实例
-        # 只包含指定任务的数据
-        return dataset  # 临时返回原数据集
+        """筛选出仅包含指定任务样本的子数据集。
+
+        之前此方法为桩实现（直接返回原数据集），导致 ``evaluate_single_task``
+        实际评估了整个数据集而非目标任务，指标被其他任务样本污染。现委托给
+        ``MultiTaskDataset.create_task_subset`` 生成真正的任务子集。
+        """
+        if hasattr(dataset, "create_task_subset"):
+            return dataset.create_task_subset(task_type)
+        # 回退：不支持任务子集的自定义数据集，保持原行为但发出警告
+        logger.warning(
+            "数据集 %s 未实现 create_task_subset，无法按任务 %s 过滤，"
+            "将评估整个数据集（指标可能被其他任务污染）",
+            type(dataset).__name__,
+            task_type,
+        )
+        return dataset
 
     def _analyze_task_performance(
         self, task_result: Dict[str, Any], task_type: str

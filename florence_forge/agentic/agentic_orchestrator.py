@@ -35,6 +35,7 @@ free data-generation byproduct.
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Protocol, Sequence, runtime_checkable
 
@@ -179,6 +180,7 @@ class OrchestratorConfig:
     summarize_every: int = 3      # emit <SUMMARIZE_STATE> every N completed steps
     min_boxes_expected: int = 0   # if >0, detect/locate must return >= this many
     emit_transcript: bool = True  # build agentic-token-wrapped trace
+    max_total_seconds: Optional[float] = None  # overall wall-clock budget for a run
     backend_kwargs: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -247,6 +249,13 @@ class AgenticOrchestrator:
         self.backend = backend
         self.config = config or OrchestratorConfig()
 
+    def _budget_exceeded(self, start_time: Optional[float]) -> bool:
+        """Return True if the overall time budget (``max_total_seconds``) elapsed."""
+        budget = self.config.max_total_seconds
+        if not budget or start_time is None:
+            return False
+        return (time.monotonic() - start_time) > budget
+
     # -- public entrypoint --------------------------------------------------
 
     def run(
@@ -284,10 +293,17 @@ class AgenticOrchestrator:
                 )
             )
 
+        start_time = time.monotonic()
         completed = 0
         for sub in plan_result.sub_tasks:
             if len(steps) >= self.config.max_steps:
                 logger.warning("Reached max_steps=%d, stopping.", self.config.max_steps)
+                break
+            if self._budget_exceeded(start_time):
+                logger.warning(
+                    "Reached max_total_seconds=%.1fs, stopping with %d/%d sub-tasks done.",
+                    self.config.max_total_seconds, len(steps), len(plan_result.sub_tasks),
+                )
                 break
 
             record = self._execute_sub_task(image, sub, state)
@@ -317,6 +333,89 @@ class AgenticOrchestrator:
             transcript="".join(transcript_parts),
             success=success,
         )
+
+    # -- public streaming entrypoint ---------------------------------------
+
+    @staticmethod
+    def step_to_dict(record: StepRecord) -> Dict[str, Any]:
+        """Serialize a :class:`StepRecord` to a JSON-friendly dict.
+
+        Public helper so streaming consumers (e.g. the FastAPI SSE endpoint)
+        can serialize step events without reaching into orchestrator internals.
+        """
+        return {
+            "sub_task_index": record.sub_task_index,
+            "intent": record.intent,
+            "tool_call": record.tool_call.describe(),
+            "raw_output": record.raw_output,
+            "verified": record.verified,
+            "attempts": record.attempts,
+            "issues": record.issues,
+        }
+
+    def run_stream(
+        self,
+        image: Any,
+        goal: str,
+        plan: Optional[Sequence[SubTask]] = None,
+    ):
+        """Execute *goal* over *image*, yielding events incrementally.
+
+        Public streaming variant of :meth:`run`. Yields plain dicts with a
+        ``"type"`` discriminator so callers never touch private methods:
+
+        * ``{"type": "plan", ...}`` — emitted once after decomposition.
+        * ``{"type": "step", "step": {...}, "record": StepRecord}`` — one per
+          executed sub-task. ``record`` is the live dataclass for callers that
+          need richer data (e.g. to render a visualization); ``step`` is the
+          JSON-friendly serialization.
+        * ``{"type": "done", ...}`` — emitted once at the end.
+        """
+        if plan is None:
+            plan_result = self.decompose(goal)
+        else:
+            plan_result = PlanResult(sub_tasks=list(plan))
+
+        yield {
+            "type": "plan",
+            "goal": goal,
+            "sub_tasks": [
+                {"index": s.index, "intent": s.intent, "goal": s.goal}
+                for s in plan_result.sub_tasks
+            ],
+            "rationale": plan_result.rationale,
+        }
+
+        state = AgentState()
+        steps: List[StepRecord] = []
+        start_time = time.monotonic()
+        for sub in plan_result.sub_tasks:
+            if len(steps) >= self.config.max_steps:
+                logger.warning("Reached max_steps=%d, stopping.", self.config.max_steps)
+                break
+            if self._budget_exceeded(start_time):
+                logger.warning(
+                    "Reached max_total_seconds=%.1fs, stopping with %d/%d sub-tasks done.",
+                    self.config.max_total_seconds, len(steps), len(plan_result.sub_tasks),
+                )
+                break
+            record = self._execute_sub_task(image, sub, state)
+            steps.append(record)
+            yield {
+                "type": "step",
+                "step": self.step_to_dict(record),
+                "record": record,
+            }
+
+        final_answer = self._aggregate(goal, state, steps)
+        success = all(r.verified for r in steps) and len(steps) > 0
+        yield {
+            "type": "done",
+            "final_answer": final_answer,
+            "state": state.summarize(),
+            "state_detail": state.to_dict(),
+            "success": success,
+        }
 
     # -- <DECOMPOSE> --------------------------------------------------------
 

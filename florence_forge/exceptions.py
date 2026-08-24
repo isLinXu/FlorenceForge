@@ -32,5 +32,25 @@ class DeploymentError(FlorenceForgeError):
     """Raised by deployment and serving components."""
 
 
+class EvaluationError(FlorenceForgeError):
+    """Raised when evaluation or benchmarking fails."""
+
+
+class AgenticError(FlorenceForgeError):
+    """Raised by the Agentic orchestrator (planning, tool execution, timeouts)."""
+
+
+class AgenticTimeoutError(AgenticError):
+    """Raised when an Agentic run exceeds its configured time budget."""
+
+
+class MoEError(FlorenceForgeError):
+    """Raised by Mixture-of-Experts components (routing, injection, capacity)."""
+
+
+class QuantizationError(FlorenceForgeError):
+    """Raised when model quantization fails or is misconfigured."""
+
+
 class SecurityWarning(UserWarning):
     """Warning for compatibility paths that weaken default security posture."""

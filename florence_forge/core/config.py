@@ -618,6 +618,18 @@ class TrainingConfig(WarnOnUnknownFieldsModel):
     run_name: Optional[str] = None
     tags: List[str] = Field(default_factory=list)
 
+    # ---------- MoE (Mixture-of-Experts) ----------
+    use_moe: bool = Field(default=False, description="启用 Mixture-of-Experts 层")
+    moe_num_experts: int = Field(default=8, ge=2, description="MoE 专家数量")
+    moe_top_k: int = Field(default=2, ge=1, description="每个 token 激活的专家数")
+    moe_aux_loss_weight: float = Field(default=0.01, ge=0.0, description="MoE 负载均衡损失权重")
+    moe_z_loss_weight: float = Field(default=0.001, ge=0.0, description="MoE 路由器 z-loss 权重")
+    moe_capacity_factor: float = Field(default=1.25, ge=1.0, description="MoE 专家容量溢出因子")
+    moe_target_layers: Optional[str] = Field(
+        default=None,
+        description="MoE 注入目标层正则表达式（如 'encoder.layer.([0-9]+)'）"
+    )
+
     # Pydantic v2 ConfigDict：
     #   populate_by_name=True → 初始化时允许用字段名或 alias
     #   （序列化输出 alias 键名需通过 model_dump(by_alias=True) 实现）

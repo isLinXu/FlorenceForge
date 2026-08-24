@@ -85,6 +85,7 @@ dev = [
     "mypy>=1.5.0,<2.0.0",
     "types-PyYAML>=6.0.0",
     "pre-commit>=3.3.0,<4.0.0",
+    "defusedxml>=0.7.1,<1.0.0",
 ]
 evaluation = [
     "nltk>=3.8,<4.0",
@@ -186,7 +187,7 @@ ensure_newline_before_comments = true
 
 # MyPy configuration
 [tool.mypy]
-python_version = "3.8"
+python_version = "3.10"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false
@@ -217,6 +218,12 @@ module = [
     "peft.*",
     "datasets.*",
     "cv2.*",
+    "nltk",
+    "nltk.*",
+    "pycocotools",
+    "pycocotools.*",
+    "rouge_score",
+    "rouge_score.*",
     "albumentations.*",
     "wandb.*",
     "tensorboard.*",
@@ -288,6 +295,15 @@ exclude_lines = [
     "class .*\\bProtocol\\):",
     "@(abc\\.)?abstractmethod",
 ]
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+
+# Keep the classic default set. Unpinned ruff 0.16+ expands defaults (I/BLE/RUF/PLR)
+# and would fail CI with thousands of findings that local 0.15.x does not report.
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401", "E402"]

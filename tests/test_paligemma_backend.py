@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 from pathlib import Path
 
 # 标记需要可选依赖的测试
-pytestmark = [pytest.mark.integration]
+pytestmark = [pytest.mark.integration, pytest.mark.slow]
 
 
 class MockPaliGemmaModel(nn.Module):

@@ -335,25 +335,40 @@ def build_tvp_dataloader(
 
 
 def _resolve_teacher_paths(cfg: Dict[str, Any], student_path: str) -> List[str]:
+    """Resolve teacher checkpoint paths for OPD distillation.
+
+    Missing teachers are NOT silently replaced by the student checkpoint:
+    doing so makes the OPD objective degenerate (``KL(student || student) ≈ 0``)
+    and produces a training run that looks healthy but distills nothing.
+
+    By default (``allow_missing_teachers=False``) a missing teacher raises
+    ``FileNotFoundError``. If the user explicitly opts in with
+    ``allow_missing_teachers=True``, the missing teacher is *skipped* (with an
+    ERROR-level log) rather than substituted with the student.
+    """
     teacher_paths = list(cfg.get("teacher_models") or cfg.get("teachers") or [])
     if not teacher_paths:
         return []
     resolved: List[str] = []
-    allow_missing = bool(cfg.get("allow_missing_teachers", True))
+    allow_missing = bool(cfg.get("allow_missing_teachers", False))
     for path in teacher_paths:
         expanded = Path(path).expanduser()
         if expanded.exists():
             resolved.append(str(expanded))
             continue
         if allow_missing:
-            logger.warning(
-                "Teacher checkpoint missing at %s; falling back to student checkpoint %s",
+            logger.error(
+                "Teacher checkpoint missing at %s; skipping it. Distillation "
+                "quality will degrade and the KL term for this expert is dropped. "
+                "Provide a valid teacher or set allow_missing_teachers=False to fail fast.",
                 expanded,
-                student_path,
             )
-            resolved.append(student_path)
         else:
-            raise FileNotFoundError(f"Teacher checkpoint not found: {expanded}")
+            raise FileNotFoundError(
+                f"Teacher checkpoint not found: {expanded}. "
+                "Set allow_missing_teachers=True to skip missing teachers "
+                "(not recommended — degrades distillation)."
+            )
     return resolved
 
 
@@ -385,7 +400,12 @@ def run_tvp_opd(
 
     teacher_paths = _resolve_teacher_paths(cfg, str(student_path))
     if not teacher_paths:
-        logger.warning("No teacher_models configured; using student for both expert slots")
+        logger.error(
+            "No usable teacher checkpoints for OPD; falling back to the student "
+            "for both expert slots. The distillation KL term will be ~0 and this "
+            "stage will NOT distill anything. Configure teacher_models to enable "
+            "real OPD distillation."
+        )
         teacher_paths = [str(student_path), str(student_path)]
 
     teachers = [
@@ -411,16 +431,15 @@ def run_tvp_opd(
         device=device,
     )
 
-    epoch_results: Dict[str, Any] = {}
     num_epochs = int(cfg.get("epochs", 2))
     save_every = int(cfg.get("save_every", 1))
-    for epoch in range(num_epochs):
-        epoch_results[f"epoch_{epoch}"] = trainer.train_epoch(
-            dataloader=dataloader,
-            epoch=epoch,
-            save_dir=Path(output_dir),
-            save_every=save_every,
-        )
+    train_result = trainer.train(
+        dataloader=dataloader,
+        num_epochs=num_epochs,
+        save_dir=Path(output_dir),
+        save_every=save_every,
+    )
+    epoch_results = train_result["epochs"]
 
     final_dir = save_tvp_checkpoint(student_wrapper, output_dir)
     return {
@@ -569,15 +588,14 @@ def run_tvp_grpo(
         reward_weights=reward_weights,
     )
 
-    epoch_results: Dict[str, Any] = {}
     num_epochs = int(cfg.get("epochs", 2))
     max_new_tokens = int(cfg.get("max_new_tokens", 512))
-    for epoch in range(num_epochs):
-        epoch_results[f"epoch_{epoch}"] = trainer.train_epoch(
-            dataloader=dataloader,
-            max_new_tokens=max_new_tokens,
-            epoch=epoch,
-        )
+    train_result = trainer.train(
+        dataloader=dataloader,
+        num_epochs=num_epochs,
+        max_new_tokens=max_new_tokens,
+    )
+    epoch_results = train_result["epochs"]
 
     final_dir = save_tvp_checkpoint(policy_wrapper, output_dir)
     return {

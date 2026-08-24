@@ -319,9 +319,12 @@ class ModelServer:
                                 detail="需要安装PIL库处理图像文件"
                             )
                         
-                        # 处理图像文件
+                        # 处理图像文件：直接传入 PIL 图像，避免手工归一化与
+                        # 处理器内部归一化的双重处理。
                         image = Image.open(io.BytesIO(contents))
-                        inputs = self._process_image(image)
+                        if image.mode != 'RGB':
+                            image = image.convert('RGB')
+                        inputs = image
                         
                     else:
                         raise HTTPException(
@@ -431,7 +434,12 @@ class ModelServer:
                     raise ValueError("需要安装PIL库处理base64图像")
                 
                 image = Image.open(io.BytesIO(image_bytes))
-                return self._process_image(image)
+                # 直接返回 PIL 图像，交由 InferenceEngine/processor 完成归一化。
+                # 此前返回 _process_image() 的手工归一化张量，会与处理器内部的
+                # 归一化叠加（双重处理），导致像素范围错误、预测退化。
+                if image.mode != 'RGB':
+                    image = image.convert('RGB')
+                return image
                 
             except Exception as e:
                 raise ValueError(f"base64图像解码失败: {e}")
