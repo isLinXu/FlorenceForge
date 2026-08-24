@@ -229,3 +229,23 @@ Benchmark 前发现 `MoELayer`/`SparseGate` 仅保存 `.detach()` 的统计副�
 | 训练集成 | 5.0 | 6.0 | MoECallback 落地（commit `c9cd0d1`），诊断指标可注入训练日志 |
 | 性能效率 | — | 3.0 | MPS 上 13.9× 减速已定位，bmm 化优化待做 |
 | **MoE 子系统综合** | 6.2 | **6.8** | Tier-2 候选巩固；Tier-1 晋升需真实多 GPU EP + 更大规模任务验证 |
+
+---
+
+## 九、MoELayer 前向性能优化（2026-08-24）
+
+### 9.1 优化内容
+
+1. **dense 路径 einsum 化**：当 `top_k=None` 且未启用 hard routing 时，`MoELayer.forward` 不再逐专家 Python 循环，而是将专家权重 `torch.stack` 后用单次 `einsum("bsd,etd->bset")` 完成全部专家计算，kernel 数从 ~40 降至 ~3。
+2. **capacity 向量化**：`_apply_capacity` 的逐专家 top-k 循环改为对转置张量单次 `torch.topk` + `scatter_`，消除 E 次 kernel 调用。
+
+### 9.2 验证
+
+- **数值等价性**：新增 `test_moe_layer_dense_fastpath_matches_loop`（atol=1e-5）、`test_moe_layer_dense_fastpath_gradient_flow`（梯度同时流向 gate 与全部专家）、`test_capacity_vectorized_matches_reference`（与逐专家参考语义一致）；`tests/experimental/` 44 个测试全部通过，ruff 零错误。
+- **性能**：CPU 微基准（B=128, S=1, d=256, E=8, 完整训练步 fwd+bwd+opt）：循环路径 689.8ms/step → einsum 路径 408.9ms/step，**加速 1.69×**。
+- **注意**：基准执行时本机 MPS 被其他训练任务（SDXL）占用（load avg >290），MPS 上的端到端耗时对比不可靠，需在机器空闲时重跑 `scripts/benchmark/moe_cifar10_benchmark.py` 复核。此前四配置 benchmark 的**精度结论不受影响**（精度与系统负载无关），但耗时数据应视为含噪。
+
+### 9.3 遗留
+
+- sparse 路径（top_k 生效）仍保留逐专家循环（稀疏 FLOPs 节省的实现本质），进一步加速需 grouped GEMM / scatter-gather 批量化，列入后续优化。
+- `import florence_forge` 冷启动 ~13.5s（torch 之外），疑为 core/__init__ 级联拉起 transformers；建议延迟化后端导入（P2）。

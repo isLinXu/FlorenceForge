@@ -78,14 +78,15 @@ class MoELayer(nn.Module):
         B, S, E = gate_weights.shape
         num_tokens = B * S
         capacity = max(1, int(self.capacity_factor * num_tokens / E))
+        k = min(capacity, num_tokens)
 
-        # 对每个专家，保留 top capacity 个 token（按权重）
-        capacity_mask = torch.zeros_like(gate_weights, dtype=torch.bool)
-        for e in range(E):
-            weights_e = gate_weights[:, :, e].reshape(-1)  # (B*S,)
-            k = min(capacity, num_tokens)
-            top_indices = torch.topk(weights_e, k, sorted=False).indices
-            capacity_mask.view(-1, E)[top_indices, e] = True
+        # 向量化：一次性对每个专家取 top-capacity 个 token（按权重）
+        # weights_t: (E, B*S)，topk 沿 token 维度，单次 kernel 完成
+        weights_t = gate_weights.reshape(num_tokens, E).t().contiguous()
+        top_indices = torch.topk(weights_t, k, dim=1, sorted=False).indices  # (E, k)
+        flat_mask = torch.zeros(num_tokens, E, dtype=torch.bool, device=gate_weights.device)
+        flat_mask.scatter_(0, top_indices.t().contiguous(), True)
+        capacity_mask = flat_mask.view(B, S, E)
 
         # 溢出统计：原始 mask (gate > 0) - 容量 mask
         active_mask = gate_weights > 0
@@ -122,17 +123,25 @@ class MoELayer(nn.Module):
 
         B, S, E = gate_weights.shape
 
-        # 稀疏前向：仅计算 gate 权重 > 0 的专家
-        output = torch.zeros(B, S, self.d_state, device=x.device, dtype=x.dtype)
-        for e_idx in range(self.num_experts):
-            expert_weights = gate_weights[:, :, e_idx]  # (B, S)
-            mask = expert_weights > 0
-            if not mask.any():
-                continue
-            selected_x = x[mask]  # (N, d_model)
-            selected_w = expert_weights[mask]  # (N,)
-            expert_out = self.experts[e_idx](selected_x)  # (N, d_state)
-            output[mask] = output[mask] + expert_out * selected_w.unsqueeze(-1)
+        if self.gate.top_k is None and not self.hard_routing:
+            # 密集批量路径：全部专家权重非零（或经 threshold 置零，einsum 结果等价），
+            # 单次矩阵乘替代逐专家 Python 循环，消除小批量下的 kernel launch 开销。
+            stacked_w = torch.stack([e.weight for e in self.experts])  # (E, d_state, d_model)
+            stacked_b = torch.stack([e.bias for e in self.experts])    # (E, d_state)
+            all_outputs = torch.einsum("bsd,etd->bset", x, stacked_w) + stacked_b
+            output = (all_outputs * gate_weights.unsqueeze(-1)).sum(dim=2)
+        else:
+            # 稀疏前向：仅计算 gate 权重 > 0 的专家
+            output = torch.zeros(B, S, self.d_state, device=x.device, dtype=x.dtype)
+            for e_idx in range(self.num_experts):
+                expert_weights = gate_weights[:, :, e_idx]  # (B, S)
+                mask = expert_weights > 0
+                if not mask.any():
+                    continue
+                selected_x = x[mask]  # (N, d_model)
+                selected_w = expert_weights[mask]  # (N,)
+                expert_out = self.experts[e_idx](selected_x)  # (N, d_state)
+                output[mask] = output[mask] + expert_out * selected_w.unsqueeze(-1)
 
         self.last_gate_weights = gate_weights.detach().clone()
         self._routing_sums = gate_weights.sum(dim=(0, 1)).detach().clone()

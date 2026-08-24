@@ -216,3 +216,65 @@ def test_aux_loss_detached_in_eval_mode():
     assert moe._gate_weights_for_loss is None
     aux = adapter.get_auxiliary_loss(loss_weight=0.1)
     assert not aux.requires_grad
+
+
+def test_moe_layer_dense_fastpath_matches_loop():
+    """dense 批量路径（top_k=None）应与逐专家循环计算数值一致。"""
+    torch.manual_seed(42)
+    moe = MoELayer(num_experts=4, d_model=8, d_state=8, top_k=None, capacity_factor=None)
+    x = torch.randn(2, 3, 8)
+
+    out_fast = moe(x)
+
+    # 手动逐专家参考计算
+    with torch.no_grad():
+        gate_weights = moe.gate(x)
+        expert_outputs = torch.stack(
+            [expert(x) for expert in moe.experts], dim=2,
+        )
+        out_ref = torch.einsum("bse,bsed->bsd", gate_weights, expert_outputs)
+
+    assert torch.allclose(out_fast, out_ref, atol=1e-5)
+
+
+def test_moe_layer_dense_fastpath_gradient_flow():
+    """dense 批量路径下梯度应同时流向 gate 与全部专家。"""
+    torch.manual_seed(42)
+    moe = MoELayer(num_experts=4, d_model=8, d_state=8, top_k=None, capacity_factor=None)
+    moe.train()
+    x = torch.randn(2, 3, 8, requires_grad=True)
+
+    out = moe(x)
+    out.sum().backward()
+
+    assert x.grad is not None and x.grad.abs().sum() > 0
+    assert moe.gate.proj.weight.grad is not None
+    for i, expert in enumerate(moe.experts):
+        assert expert.weight.grad is not None, f"expert {i} 缺少梯度"
+
+
+def test_capacity_vectorized_matches_reference():
+    """向量化 _apply_capacity 应与逐专家 topk 参考实现语义一致。"""
+    torch.manual_seed(0)
+    moe = MoELayer(num_experts=4, d_model=8, d_state=8, top_k=2, capacity_factor=1.25)
+    gate_weights = torch.rand(2, 5, 4)
+
+    out_w, out_overflow = moe._apply_capacity(gate_weights.clone())
+
+    # 参考：逐专家 topk
+    B, S, E = gate_weights.shape
+    num_tokens = B * S
+    capacity = max(1, int(1.25 * num_tokens / E))
+    k = min(capacity, num_tokens)
+    ref_mask = torch.zeros(num_tokens, E, dtype=torch.bool)
+    for e in range(E):
+        w_e = gate_weights[:, :, e].reshape(-1)
+        idx = torch.topk(w_e, k, sorted=False).indices
+        ref_mask[idx, e] = True
+    ref_active = gate_weights.reshape(num_tokens, E) > 0
+    ref_overflow = (ref_active & ~ref_mask).sum(dim=0).float()
+
+    assert torch.allclose(out_overflow, ref_overflow)
+    # 掩码后的权重：被截断位置必须为 0
+    masked = out_w.reshape(num_tokens, E)
+    assert torch.all(masked[~ref_mask] == 0)
