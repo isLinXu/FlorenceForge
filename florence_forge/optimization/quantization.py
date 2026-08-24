@@ -325,6 +325,29 @@ class ModelQuantizer:
         )
 
     @staticmethod
+    def quantize_module_dynamic(
+        module: nn.Module,
+        dtype: torch.dtype = torch.qint8,
+        target_layers: Optional[set] = None,
+    ) -> nn.Module:
+        """对已加载的 ``nn.Module`` 应用 PyTorch 动态量化。
+
+        这是"就地量化内存中模块"这一动态量化路径的**单一事实源**。
+        ``utils.optimization.ModelOptimizer.quantize_model`` 已委托到此方法，
+        避免两套量化实现并存。
+
+        Args:
+            module: 待量化的模块。
+            dtype: 量化数据类型（默认 ``torch.qint8``）。
+            target_layers: 要量化的层类型集合（默认 ``{nn.Linear, nn.Conv2d}``）。
+
+        Returns:
+            动态量化后的模块。
+        """
+        layers = target_layers or {nn.Linear, nn.Conv2d}
+        return torch.quantization.quantize_dynamic(module, layers, dtype=dtype)
+
+    @staticmethod
     def get_model_size(model: nn.Module) -> Dict[str, float]:
         """获取模型大小信息（字节级别精确统计）"""
         param_size = 0

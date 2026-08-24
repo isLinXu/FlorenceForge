@@ -279,6 +279,46 @@ class MultiTaskEvaluator:
             collate_fn=self._get_collate_fn(dataset),
         )
 
+    def _evaluate_batch(
+        self, batch: Dict[str, Any]
+    ) -> Optional[List[tuple]]:
+        """对单个批次执行 生成 → 解码 → 参考解码 的公共流程。
+
+        ``evaluate_dataset`` 与 ``evaluate_task`` 之前各自重复了"移动数据到设备、
+        取生成输入、generate、剥离 prompt、按任务解码预测与参考"这一整段逻辑。
+        此处统一抽取为单一实现。
+
+        Returns:
+            ``(pred_raw, ref_raw, task_type)`` 三元组列表；若该批次缺少参考答案
+            （labels/reference_ids），返回 ``None`` 表示调用方应跳过。
+        """
+        batch = {
+            k: v.to(self.device) if isinstance(v, torch.Tensor) else v
+            for k, v in batch.items()
+        }
+        batch_task_types = self._get_batch_task_types(batch)
+
+        generation_inputs = self._get_generation_inputs(batch)
+        pred_ids = self.model.generate(
+            input_ids=generation_inputs['input_ids'],
+            pixel_values=generation_inputs['pixel_values'],
+            attention_mask=generation_inputs.get('attention_mask'),
+            max_new_tokens=512,
+            do_sample=False,
+        )
+
+        # 仅在生成结果确实包含 prompt 前缀时剥离
+        new_tokens = self._extract_generated_tokens(pred_ids, generation_inputs['input_ids'])
+        decoded_predictions = self._decode_by_task_types(new_tokens, batch_task_types)
+
+        reference_ids = self._get_reference_ids(batch)
+        if reference_ids is None:
+            logger.warning("批次缺少 labels/reference_ids，跳过指标计算")
+            return None
+        decoded_references = self._decode_by_task_types(reference_ids, batch_task_types)
+
+        return list(zip(decoded_predictions, decoded_references, batch_task_types))
+
     def evaluate_dataset(
         self,
         dataset: MultiTaskDataset,
@@ -330,41 +370,13 @@ class MultiTaskEvaluator:
         
         with torch.no_grad():
             for batch in tqdm(dataloader, desc="评估中"):
-                # 移动数据到设备
-                batch = {k: v.to(self.device) if isinstance(v, torch.Tensor) else v 
-                        for k, v in batch.items()}
-                
-                # 获取批次中的任务类型
-                batch_task_types = self._get_batch_task_types(batch)
-                
-                # 生成预测
-                generation_inputs = self._get_generation_inputs(batch)
-                predictions = self.model.generate(
-                    input_ids=generation_inputs['input_ids'],
-                    pixel_values=generation_inputs['pixel_values'],
-                    attention_mask=generation_inputs.get('attention_mask'),
-                    max_new_tokens=512,
-                    do_sample=False
-                )
-                
-                # 解码预测结果：仅在生成结果确实包含 prompt 前缀时剥离
-                new_tokens = self._extract_generated_tokens(predictions, generation_inputs['input_ids'])
-                decoded_predictions = self._decode_by_task_types(new_tokens, batch_task_types)
-                
-                # 解码参考答案
-                # 优先使用 labels（包含 answer 部分的 token），其次使用专门存储的 reference_ids
-                reference_ids = self._get_reference_ids(batch)
-                if reference_ids is None:
-                    # 如果没有参考答案，无法计算指标，跳过该批次
-                    logger.warning("批次缺少 labels/reference_ids，跳过指标计算")
+                decoded = self._evaluate_batch(batch)
+                if decoded is None:
                     continue
-                decoded_references = self._decode_by_task_types(reference_ids, batch_task_types)
-                
+
                 # 按任务类型组织结果
-                for i, (pred, ref, task_type) in enumerate(
-                    zip(decoded_predictions, decoded_references, batch_task_types)
-                ):
-                    # 检查样本数限制
+                for pred, ref, task_type in decoded:
+                    # 检查样本数限制（计数仅在实际纳入统计时增加，跳过不计数）
                     if (max_samples_per_task and 
                         task_sample_counts[task_type] >= max_samples_per_task):
                         continue
@@ -475,33 +487,12 @@ class MultiTaskEvaluator:
         
         with torch.no_grad():
             for batch in tqdm(dataloader, desc=f"评估 {task_type}"):
-                # 移动数据到设备
-                batch = {k: v.to(self.device) if isinstance(v, torch.Tensor) else v 
-                        for k, v in batch.items()}
-                
-                # 生成预测
-                generation_inputs = self._get_generation_inputs(batch)
-                pred_ids = self.model.generate(
-                    input_ids=generation_inputs['input_ids'],
-                    pixel_values=generation_inputs['pixel_values'],
-                    attention_mask=generation_inputs.get('attention_mask'),
-                    max_new_tokens=512,
-                    do_sample=False
-                )
-                
-                # 解码结果：仅在生成结果确实包含 prompt 前缀时剥离
-                new_tokens = self._extract_generated_tokens(pred_ids, generation_inputs['input_ids'])
-                batch_task_types = self._get_batch_task_types(batch)
-                batch_predictions = self._decode_by_task_types(new_tokens, batch_task_types)
-                
-                reference_ids = self._get_reference_ids(batch)
-                if reference_ids is None:
-                    logger.warning("批次缺少 labels/reference_ids，跳过指标计算")
+                decoded = self._evaluate_batch(batch)
+                if decoded is None:
                     continue
-                batch_references = self._decode_by_task_types(reference_ids, batch_task_types)
-                
-                # 清理和收集结果
-                for pred, ref in zip(batch_predictions, batch_references):
+
+                # 清理和收集结果（task_subset 已按任务过滤，忽略逐样本 task_type）
+                for pred, ref, _ in decoded:
                     pred_clean = self._clean_prediction(pred, task_type)
                     ref_clean = self._clean_reference(ref, task_type)
                     
@@ -527,6 +518,34 @@ class MultiTaskEvaluator:
         
         return results
     
+    def _predict_task_compat(
+        self,
+        image: Union[str, Path, 'PIL.Image.Image'],
+        task_type: str,
+    ) -> Union[str, List[str]]:
+        """以后端无关的方式对单张图片执行任务预测。
+
+        ``predict_task`` 是 Florence2MultiTaskModel 门面提供的便捷接口，但并非
+        所有后端（如 PaliGemma / 通用 HF 后端）都实现它。此前直接调用会在这些
+        后端上抛出 ``AttributeError``。这里优先使用 ``predict_task``，否则回退到
+        标准的 ``generate(images=..., task_prompt=...)`` 接口。
+        """
+        if hasattr(self.model, "predict_task"):
+            return self.model.predict_task(image, task_type)
+
+        # 回退：从任务表解析 prompt，走通用 generate 接口
+        loaded_image = image
+        if isinstance(image, (str, Path)):
+            from PIL import Image as _PILImage
+
+            loaded_image = _PILImage.open(image).convert("RGB")
+
+        task_config = FLORENCE2_TASKS.get(task_type)
+        task_prompt = getattr(task_config, "prompt", None) if task_config else None
+        if task_prompt is None:
+            task_prompt = task_type
+        return self.model.generate(images=loaded_image, task_prompt=task_prompt)
+
     def evaluate_single_sample(
         self,
         image: Union[str, Path, 'PIL.Image.Image'],
@@ -544,7 +563,7 @@ class MultiTaskEvaluator:
             评估结果
         """
         # 使用模型进行预测
-        prediction = self.model.predict_task(image, task_type)
+        prediction = self._predict_task_compat(image, task_type)
         
         result = {
             'task_type': task_type,

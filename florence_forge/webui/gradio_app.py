@@ -18,11 +18,45 @@ from __future__ import annotations
 
 import argparse
 import logging
-from typing import Any, Dict, List
+import threading
+from typing import Any, Dict, List, Tuple
 
 from florence_forge.utils.optional_dependencies import missing_dependency_message
 
 logger = logging.getLogger(__name__)
+
+# Cache loaded inference engines keyed by (model_path, device) so repeated
+# requests reuse the already-loaded model instead of paying the 10-30s model
+# load cost on every call. Guarded by a lock because Gradio may dispatch
+# handlers from multiple worker threads concurrently.
+_ENGINE_CACHE: Dict[Tuple[str, str], Any] = {}
+_ENGINE_CACHE_LOCK = threading.Lock()
+
+
+def _get_cached_engine(model_path: str, device: str) -> Any:
+    """Return a cached ``InferenceEngine`` for ``(model_path, device)``.
+
+    Loads and caches the engine on first use; subsequent calls with the same
+    key return the existing instance.
+    """
+    from florence_forge.deployment.inference import InferenceEngine
+
+    key = (model_path, device)
+    engine = _ENGINE_CACHE.get(key)
+    if engine is not None:
+        return engine
+    with _ENGINE_CACHE_LOCK:
+        engine = _ENGINE_CACHE.get(key)
+        if engine is None:
+            logger.info("Loading inference engine for %s on %s (first use)", model_path, device)
+            engine = InferenceEngine(
+                model=model_path,
+                device=device,
+                batch_size=1,
+                use_amp=False,
+            )
+            _ENGINE_CACHE[key] = engine
+        return engine
 
 GRADIO_AVAILABLE = False
 gr = None  # type: ignore
@@ -51,7 +85,6 @@ def _run_orchestrator(
     """Run the agentic orchestrator and return a serializable result dict."""
     from florence_forge.agentic import AgenticOrchestrator, OrchestratorConfig
     from florence_forge.cli.commands_agentic import InferenceEngineAdapter
-    from florence_forge.deployment.inference import InferenceEngine
     from florence_forge.utils.visualization_export import generate_step_visualization
 
     if image is None:
@@ -61,12 +94,7 @@ def _run_orchestrator(
 
     pil_img = image.convert("RGB") if hasattr(image, "convert") else image
 
-    engine = InferenceEngine(
-        model=model_path,
-        device=device,
-        batch_size=1,
-        use_amp=False,
-    )
+    engine = _get_cached_engine(model_path, device)
     backend = InferenceEngineAdapter(engine)
     orch = AgenticOrchestrator(
         backend,

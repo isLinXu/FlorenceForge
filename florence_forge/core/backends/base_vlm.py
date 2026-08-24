@@ -419,9 +419,28 @@ class BaseVLMBackend(ABC, nn.Module):
         if task_name not in self._supports_tasks:
             self._supports_tasks.append(task_name)
 
+    def _get_total_param_count(self) -> int:
+        """Return the cached total parameter count for the current model.
+
+        Total parameter count is structural and does not change after load, so
+        summing ``numel()`` over every parameter on each ``get_model_info`` call
+        is wasteful (O(#parameters)). The result is cached and keyed by the
+        model object identity, so a model swap (e.g. after LoRA merge, where the
+        backend's ``_model`` is replaced) transparently invalidates the cache.
+        """
+        model = self.model
+        cache = getattr(self, "_param_count_cache", None)
+        if cache is not None and cache[0] == id(model):
+            return cache[1]
+        total = sum(p.numel() for p in model.parameters())
+        self._param_count_cache = (id(model), total)
+        return total
+
     def get_model_info(self) -> Dict[str, Any]:
         self.load()
-        total_parameters = sum(p.numel() for p in self.model.parameters())
+        total_parameters = self._get_total_param_count()
+        # trainable count is recomputed each call because requires_grad can be
+        # toggled at runtime (freezing, LoRA), so it must not be cached.
         trainable_parameters = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
         trainable_ratio = (trainable_parameters / total_parameters) if total_parameters else 0.0
         info = {

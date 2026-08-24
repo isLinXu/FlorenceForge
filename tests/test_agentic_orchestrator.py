@@ -583,5 +583,69 @@ class TestDataclasses:
         assert len(plan) == 2
 
 
+class TestOrchestratorTimeout:
+    """max_total_seconds wall-clock budget stops the run early."""
+
+    def test_budget_stops_run_early(self):
+        import time as _time
+
+        from florence_forge.agentic import AgenticOrchestrator, OrchestratorConfig
+
+        class SlowBackend:
+            def predict_task(self, images, task_name, text_input=None, **kwargs):
+                _time.sleep(0.05)
+                return "a photo"
+
+        goal = "detect all cars and describe scene"
+        orch = AgenticOrchestrator(
+            SlowBackend(),
+            OrchestratorConfig(emit_transcript=False, max_total_seconds=0.01),
+        )
+        planned = len(orch.decompose(goal))
+        assert planned >= 2  # sanity: goal decomposes to multiple sub-tasks
+
+        result = orch.run(image=object(), goal=goal)
+        # After the first (slow) step the budget is exceeded, so the run stops
+        # before completing all planned sub-tasks.
+        assert 0 < len(result.steps) < planned
+
+    def test_no_budget_runs_all_steps(self):
+        from florence_forge.agentic import AgenticOrchestrator, OrchestratorConfig
+
+        class FastBackend:
+            def predict_task(self, images, task_name, text_input=None, **kwargs):
+                return "a photo of a street"
+
+        orch = AgenticOrchestrator(
+            FastBackend(),
+            OrchestratorConfig(emit_transcript=False, max_total_seconds=None),
+        )
+        result = orch.run(image=object(), goal="describe the scene")
+        assert len(result.steps) >= 1
+
+    def test_run_stream_respects_budget(self):
+        import time as _time
+
+        from florence_forge.agentic import AgenticOrchestrator, OrchestratorConfig
+
+        class SlowBackend:
+            def predict_task(self, images, task_name, text_input=None, **kwargs):
+                _time.sleep(0.05)
+                return "a photo"
+
+        goal = "detect cars and describe the scene"
+        orch = AgenticOrchestrator(
+            SlowBackend(),
+            OrchestratorConfig(emit_transcript=False, max_total_seconds=0.01),
+        )
+        planned = len(orch.decompose(goal))
+        events = list(orch.run_stream(image=object(), goal=goal))
+        types = [e["type"] for e in events]
+        assert types[0] == "plan"
+        assert types[-1] == "done"
+        # Stopped early: fewer step events than planned sub-tasks.
+        assert 0 < types.count("step") < planned
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

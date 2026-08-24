@@ -5,7 +5,7 @@
 import logging
 import time
 from contextlib import nullcontext
-from typing import Dict, Any, Optional, Tuple, List, Callable
+from typing import TYPE_CHECKING, Dict, Any, Optional, Tuple, List, Callable
 from collections import defaultdict
 
 import torch
@@ -19,6 +19,10 @@ from ..utils.training_logging import (
     resolve_total_steps,
     should_log_step,
 )
+
+if TYPE_CHECKING:  # pragma: no cover - typing-only imports
+    from ._accelerator_compat import Accelerator
+    from ..core.callbacks import CallbackManager
 
 logger = logging.getLogger(__name__)
 
@@ -40,8 +44,8 @@ class TrainingLoop:
         self,
         model: nn.Module,
         config: TrainingConfig,
-        accelerator=None,
-        callback_manager=None
+        accelerator: Optional["Accelerator"] = None,
+        callback_manager: Optional["CallbackManager"] = None,
     ):
         """初始化训练循环
         
