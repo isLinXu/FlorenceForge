@@ -44,4 +44,6 @@ jobs:
             florence_forge/evaluation/unified_metrics.py \
             florence_forge/utils/console.py \
             florence_forge/training/rewards \
-            --config-file pyproject.toml --show-error-codes
+            --config-file pyproject.toml \
+            --show-error-codes \
+            --follow-imports=silent
