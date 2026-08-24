@@ -31,6 +31,7 @@ FlorenceForge - Florence-2多任务微调库
 """
 
 from importlib import import_module, util as importlib_util
+from pathlib import Path
 
 __version__ = "1.0.0"
 __author__ = "FlorenceForge Team"
@@ -59,7 +60,12 @@ from .exceptions import (
 )
 
 CORE_AVAILABLE = True
-MULTI_DATASET_AVAILABLE = importlib_util.find_spec("florence_forge.data.multi_dataset_manager") is not None
+# 注意：不能用 importlib.util.find_spec("florence_forge.data.multi_dataset_manager")
+# 探测——find_spec 对点分路径会先执行父包 florence_forge.data 的 __init__，
+# 级联拉起 torch/pandas（冷启动 ~13s）。改为文件存在性检查，零导入开销。
+MULTI_DATASET_AVAILABLE = (
+    Path(__file__).parent / "data" / "multi_dataset_manager.py"
+).exists()
 CLI_AVAILABLE = importlib_util.find_spec("florence_forge.cli") is not None
 
 # 公开API
