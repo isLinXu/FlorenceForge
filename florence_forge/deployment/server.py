@@ -116,7 +116,7 @@ class ModelServer:
         port: int = 8000,
         title: str = "Florence Forge Model Server",
         description: str = "Florence-2 模型推理服务",
-        version: str = "1.0.0"
+        version: Optional[str] = None
     ):
         """初始化模型服务器
         
@@ -146,7 +146,11 @@ class ModelServer:
             self.inference_backend = NativeInferenceBackend(inference_engine)
         self.host = host
         self.port = port
-        
+
+        if version is None:
+            from .. import __version__ as _pkg_version
+            version = _pkg_version
+
         # 创建FastAPI应用
         self.app = FastAPI(
             title=title,

@@ -182,7 +182,7 @@ class TestPackagingMetadata:
     def test_package_import_is_lightweight(self):
         package = importlib.import_module("florence_forge")
         assert hasattr(package, "TrainingConfig")
-        assert package.__version__ == "1.0.0"
+        assert package.__version__ == "1.1.0"
 
     def test_subpackage_imports_are_lightweight(self):
         for module_name in [

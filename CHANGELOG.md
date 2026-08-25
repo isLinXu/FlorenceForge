@@ -7,7 +7,29 @@
 
 ## [Unreleased]
 
-### Added
+- （尚无内容）
+
+---
+
+## [1.1.0] - 2026-08-25
+
+质量里程碑版本：Phase 0/Phase 1 全部落地，CI 全量回归 1,192 项测试通过（覆盖率 56.62%）。
+本段同时收录此前 Unreleased 中未发布的 P0/P1 条目。
+
+### Added（Phase 1 新能力）
+- **Agentic 子系统**：`florence_forge/agentic/` 编排器与工具注册表，CLI 新增 `agentic` 子命令，
+  `deployment/agentic_api.py` 提供流式 API，公开 `run_stream()`；编排器支持超时控制、模型缓存与更安全的图像处理。
+- **MoE Tier-2 训练栈**：`florence_forge/training/moe/`（expert_parallel、sparse_gate、MoECallback、
+  验证器与 CIFAR-10 四配置 benchmark 脚本），MoE 从 experimental 正式收敛进训练栈。
+- **Rewards 子包**：`training/rewards/`（accuracy / format / quality / agentic / factory），
+  替代原 929 行单文件 `reward_models.py`。
+- **task_metrics 注册表**：`evaluation/task_metrics/`（base / registry / calculators / vp），
+  评估指标按任务可插拔。
+- **WebUI 双路径**：Gradio 应用 `webui/gradio_app.py` 与 React 前端 `frontend/`（Vite + Tailwind +
+  Agentic 流式面板）。
+- **数据侧增强**：`DataProfiler`、数据增强接入 `MultiTaskDataset`、数据子集构造收敛至
+  `MultiTaskDataset.from_existing`。
+- **CI 强化**：unit / integration 分组 job、轻量 mypy 子集门禁、覆盖率门禁 56%、lint 工具版本 pin。
 - **依赖分层**：拆分 `requirements.txt` 为 `requirements-core.txt` / `requirements-optional.txt` / `requirements-dev.txt`，
   并将旧 `requirements.txt` 改为聚合入口，安装时可按需选择最小核心或全量依赖。
 - **CHANGELOG.md**：开始按 Keep a Changelog 规范跟踪发布历史。
@@ -30,19 +52,30 @@
 - **GitHub Actions Lint**：新增 `.github/workflows/lint.yml`，
   对 PR 自动跑 `ruff check` + `black --check` + `isort --check`。
 - **v1 → v2 迁移指南**：`docs/MIGRATION_v1_to_v2.md` 阐明双训练栈现状、并行期、对齐计划与用户迁移路径。
-- **MoE 实验模块文档**：`florence_forge/experimental/moe/README.md` 补充使用示例、设计动机、已知限制。
 
 ### Changed
+- **callbacks 子包化**：`core/callbacks.py`（621 行）拆分为 `core/callbacks/`（base / builtin /
+  factory / integrations），新增任务注册表与更丰富的异常类型。
+- **GRPO 批量化**：rollout 与 log-probs 计算批处理化；统一 trainer 接口；修复 OPD teacher 回退。
+- **量化入口统一**：`optimization/quantization.py` 收敛单一入口；`config_manager` 切换至 `cli_print`。
+- **MoE 前向性能**：dense 路径单次 einsum 批处理 + capacity topk 向量化（CPU 微基准 1.69×）。
+- **冷启动优化**：`import florence_forge` 的模块探测改为路径检查，import 开销 13.5s → ~1.5s。
 - **.gitignore 强化**：忽略 `scripts/infer/results_*`、`scripts/infer/images_caption/`、
   `runs/`、`evaluation/`、`.benchmarks/` 以及 `*.onnx` 等推理/训练产物，避免大文件意外入库。
 - **temp/ 中有价值素材**已提升到 `scripts/data-conversion/`（`convert_ocr_from_txt.py`、
   `example_ocr_data.txt`），原 `temp/` 仅作为本地草稿目录（已在 .gitignore 中）。
 
 ### Fixed
-- （待补充）
+- **MoE aux/z-loss 梯度断连**：训练模式下保留门控权重 / logits 的计算图，aux loss 修复后
+  CIFAR-10 sparse 配置 +7.61pp，专家负载 Gini 0.625 → 0.500。
+- **doctor --json 输出**：Rich soft_wrap 修复，保证 JSON 可解析；新增 MoECallback 诊断。
+- **评估正确性**：真实任务过滤、去重 evaluate 循环、后端无关的单样本评估；VP CLI 脚本
+  重新导出 `load_vp_quality_summary`。
+- **训练稳健性**：梯度累积与 checkpoint 加载加固。
+- **部署安全**：默认 CORS 收紧，跳过冗余设备移动。
 
 ### Removed
-- （待补充）
+- **`experimental/moe/`**：功能已收敛至 `training/moe/`，旧目录（含 README/WARNING）删除。
 
 ---
 
