@@ -11,6 +11,15 @@ from typing import Any, Dict, Union
 from .benchmark_pdf_report import generate_pdf_report as _generate_pdf_report
 
 
+def _get_package_version() -> str:
+    """Return the installed FlorenceForge version without hard-coding it."""
+    try:
+        from .. import __version__
+    except Exception:
+        return "unknown"
+    return __version__
+
+
 def save_benchmark_results(
     results: Dict[str, Any],
     output_dir: Union[str, Path],
@@ -295,7 +304,7 @@ def generate_json_report(
         "metadata": {
             "report_generated_at": datetime.now().isoformat(),
             "report_version": "1.0",
-            "florence_forge_version": "1.0.0",
+            "florence_forge_version": _get_package_version(),
             "total_datasets_evaluated": len(results.get("task_performance", {})),
             "evaluation_mode": "distributed" if enable_distributed else "single_gpu",
             "cache_enabled": enable_incremental,

@@ -33,7 +33,7 @@ FlorenceForge - Florence-2多任务微调库
 from importlib import import_module, util as importlib_util
 from pathlib import Path
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 __author__ = "FlorenceForge Team"
 __email__ = "contact@florenceforge.ai"
 __license__ = "MIT"

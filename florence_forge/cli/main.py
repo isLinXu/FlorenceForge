@@ -1182,8 +1182,10 @@ def eval_command():
 
 def info_command():
     """信息命令入口点"""
+    from florence_forge import __version__
+
     cli_print("\n=== Florence Forge 信息 ===")
-    cli_print("版本: 1.0.0")
+    cli_print(f"版本: {__version__}")
     cli_print("描述: Florence-2多任务微调库")
     cli_print("GitHub: https://github.com/florenceforge/florence-forge")
     cli_print("文档: https://florenceforge.readthedocs.io")
