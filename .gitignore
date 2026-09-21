@@ -249,6 +249,8 @@ scripts/training/runs/
 # 本地审计/分析快照
 audit_report*.md
 *.session.json
+/FlorenceForge_Deep_Analysis*.md
+/FlorenceForge_WebUI_Agentic_Analysis.md
 
 # Session & analysis artifacts
 .codex_reports/
